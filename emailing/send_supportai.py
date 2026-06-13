@@ -355,7 +355,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
         </a>"""
         demo_block = f"""
       <p style="font-size:18px;font-weight:bold;color:#0A1F3D;margin:0 0 14px;font-family:Arial,sans-serif;letter-spacing:-0.3px;">
-        Voir SupportAI en action (1 min)
+        Voir SupportAI en action
       </p>
       {thumb_tag}
       <a href="{VIDEO_URL}"
