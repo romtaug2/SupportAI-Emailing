@@ -112,7 +112,7 @@ else:
 # Logo inline (PNG embarqué en CID, comme ThermoData)
 BASE_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = BASE_DIR / "Source"
-LOGO_WIDTH = 120
+LOGO_WIDTH = 100
 
 
 def _find_logo() -> Path | None:
