@@ -1,0 +1,101 @@
+# ═══════════════════════════════════════════════════════════════
+#  SupportAI — Pipeline Quotidien : RÉCOLTE + ENVOI 300/jour
+#  Lun-Sam (6j/sem), 1 seul run, temps borné (~35 min max) :
+#   1. scrape_slice.py  : tranche notaires (300 offices ≈ 10 min,
+#      skip auto du déjà-vu, curseur région, mode create = 0 stale)
+#   2. build_master.py  : merge exports → master (tracking préservé)
+#   3. send_supportai.py: MASS 300 emails (pauses 2-6s ≈ 20 min)
+#   4. commit : DB + exports + curseur + master
+#  Budget Actions ≈ 35 min × 26 j ≈ 910 min/mois.
+#  Secret requis : SMTP_PASSWORD
+#  ⚠️ Hiver (CET) : décaler le cron de +1h si besoin.
+# ═══════════════════════════════════════════════════════════════
+
+name: "🔁 SupportAI Pipeline Quotidien"
+
+on:
+  schedule:
+    - cron: "50 5 * * 1-6"   # Lun-Sam 7h50 Paris (été)
+  workflow_dispatch:
+    inputs:
+      daily_limit:
+        description: "Emails à envoyer (défaut 300)"
+        required: false
+        default: "300"
+      slice_size:
+        description: "Offices notaires à scraper (défaut 300, 0 = skip)"
+        required: false
+        default: "300"
+      dry_run:
+        description: "Dry run envoi (construire sans envoyer) ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: supportai-daily
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # Dépendances du scraper notaires uniquement (pas de Playwright ici)
+      - name: Dépendances (léger)
+        run: pip install -q requests beautifulsoup4 lxml openpyxl
+
+      - name: 1/3 Récolte — tranche notaires
+        if: ${{ github.event.inputs.slice_size != '0' }}
+        env:
+          SLICE_SIZE: ${{ github.event.inputs.slice_size || '300' }}
+        run: python scrape_slice.py
+        continue-on-error: true   # un échec de récolte ne bloque pas l'envoi
+
+      - name: 2/3 Master — fusion exports
+        run: python emailing/build_master.py
+
+      - name: 3/3 Envoi — MASS
+        env:
+          SEND_MODE: "MASS"
+          DAILY_LIMIT: ${{ github.event.inputs.daily_limit || '300' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python emailing/send_supportai.py
+
+      - name: Commit (avec retry anti-conflit)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          git config user.name  "SupportAI Bot"
+          git config user.email "bot@supportai.fr"
+          git add data/notaires.db data/scrape_cursor.json exports/notaires/ \
+                  emailing/data/supportai_contacts_master.csv data/reports/ 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "ℹ️ Rien à committer"
+            exit 0
+          fi
+
+          git commit -m "🔁 Pipeline $(date -u +%Y-%m-%d) : récolte + envoi"
+
+          for i in 1 2 3; do
+            git push origin main && exit 0
+            echo "⚠️ Push rejeté, rebase..."
+            git pull --rebase --autostash origin main || exit 1
+            sleep $((RANDOM % 10 + 3))
+          done
+          exit 1

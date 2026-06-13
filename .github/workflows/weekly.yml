@@ -1,0 +1,84 @@
+name: Run hebdomadaire
+
+# Lancement automatique tous les lundis à 06:00 UTC (08:00 Paris été, 07:00 hiver)
+# + bouton manuel dans l'onglet Actions
+on:
+  schedule:
+    - cron: '0 6 * * 0'
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "Mode test (volumes réduits) ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      verticals:
+        description: "Verticals à lancer (vide = tous, sinon a,b,c)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360    # 6h de budget, large pour un run complet
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Installer dépendances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Installer Chromium pour Playwright
+        run: python -m playwright install --with-deps chromium
+
+      - name: Lancer run hebdo
+        env:
+          PB_TEST: ${{ github.event.inputs.test_mode }}
+          PB_VERTICALS: ${{ github.event.inputs.verticals }}
+        run: python run_weekly.py
+
+      - name: Uploader logs et rapports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-et-rapports-${{ github.run_id }}
+          path: |
+            data/logs/
+            data/reports/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Uploader exports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exports-${{ github.run_id }}
+          path: exports/
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Committer exports et bases SQLite dans le repo
+        if: success()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/*.db exports/ data/reports/ || true
+          if git diff --cached --quiet; then
+            echo "Rien à committer"
+          else
+            git commit -m "chore(data): run hebdo $(date -u +'%Y-%m-%d')"
+            git push
+          fi
