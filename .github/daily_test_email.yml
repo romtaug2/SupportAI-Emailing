@@ -1,0 +1,47 @@
+name: Test Email — SupportAI Pitch (manuel)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Envoie le pitch commercial complet SupportAI à romtaug@gmail.com via Brevo,
+# UNIQUEMENT en déclenchement manuel (bouton "Run workflow").
+# Pas de cron : tu testes quand tu veux.
+#
+# Secret requis : SMTP_PASSWORD
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (ne pas envoyer, juste construire le mail) ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-email
+  cancel-in-progress: false
+
+jobs:
+  send-test:
+    name: Envoi pitch SupportAI (manuel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Envoyer le pitch SupportAI
+        env:
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: python emailing/send_supportai.py

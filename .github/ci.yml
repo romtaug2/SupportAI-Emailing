@@ -1,0 +1,71 @@
+name: CI smoke test
+
+# Vérifie à chaque push / PR :
+# 1. Que tout le code s'importe sans erreur
+# 2. Que les scrapers les plus rapides passent en mode test
+# 3. Que le statut CLI fonctionne
+#
+# Volontairement limité aux scrapers rapides (auto_ecole + hotels) pour
+# garder la CI sous 10 minutes. Les scrapers Cloudflare-protected
+# (education) et Playwright (france_travail) sont testés uniquement
+# via le run hebdo complet.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "scrapers/**"
+      - "cli.py"
+      - "run_weekly.py"
+      - "requirements.txt"
+      - ".github/workflows/ci.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Installer dépendances minimales
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml urllib3 pandas openpyxl tqdm
+
+      - name: Vérifier les imports
+        run: |
+          python -c "from scrapers import REGISTRY; print('Verticals enregistrés :', sorted(REGISTRY))"
+          python cli.py list
+
+      - name: Test mode auto_ecole (2 départements)
+        run: python cli.py update auto_ecole --test
+
+      - name: Statut auto_ecole
+        run: python cli.py status auto_ecole
+
+      - name: Vérifier que les exports existent
+        run: |
+          test -f exports/auto_ecole/annuaire_auto_ecoles_france.csv
+          test -f exports/auto_ecole/annuaire_auto_ecoles_france.xlsx
+          test -f exports/auto_ecole/annuaire_auto_ecoles_france.jsonl
+          wc -l exports/auto_ecole/annuaire_auto_ecoles_france.csv
+
+      - name: Uploader artefacts (utile pour debug si CI échoue)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-smoke-${{ github.run_id }}
+          path: |
+            data/logs/
+            exports/auto_ecole/
+          if-no-files-found: ignore
+          retention-days: 7
