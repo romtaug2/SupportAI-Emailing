@@ -58,6 +58,9 @@ PREMIUM_URL = STRIPE_LINK_PREMIUM or TARIF_URL
 CODESOURCE_URL = STRIPE_LINK_CODESOURCE or TARIF_URL
 FONCTIONNEMENT_URL = "https://supportai.fr#fonctionnement"
 CONFIGURATEUR_URL = "https://supportai.fr#configurateur"
+# Espace de configuration (Streamlit) : accessible après commande,
+# connexion sécurisée via Google.
+STREAMLIT_URL = "https://supportai-config.streamlit.app/"
 # Adresse de contact cliquable (mailto + footer). Le jour où la redirection
 # contact@supportai.fr → Gmail est en place, remets "contact@supportai.fr" ici.
 CONTACT_EMAIL = "romtaug+supportai@gmail.com"
@@ -229,12 +232,9 @@ FAKE_CONTACT = {
 
 def _format_subject(contact: dict) -> str:
     company = contact.get("company", "").strip()
-    city = contact.get("city", "").strip()
-    if company and city:
-        return f"🤖 {company} : un chatbot IA 24/7 qui répond à vos clients à votre place"
     if company:
         return f"🤖 {company} : un chatbot IA 24/7 clé en main"
-    return "🤖 Un chatbot IA 24/7 qui répond à vos clients, même la nuit"
+    return "🤖 Un chatbot IA 24/7 clé en main pour votre service client"
 
 
 def _format_greeting(contact: dict) -> str:
@@ -303,6 +303,7 @@ SupportAI : à partir de 499€, une fois. C'est tout.
 Voir la démo : {SITE_URL}
 Tarif : {TARIF_URL}
 Comment ça marche : {FONCTIONNEMENT_URL}
+Espace de configuration (après commande, connexion Google) : {STREAMLIT_URL}
 
 Répondez à cet email pour démarrer : {CONTACT_EMAIL}
 Désinscription : {unsubscribe_url}
@@ -367,6 +368,11 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
         <a href="{CONFIGURATEUR_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">
           Tester le configurateur en direct
         </a>
+      </p>
+      <p style="margin:8px 0 0;font-size:12px;line-height:1.6;font-family:Arial,sans-serif;color:#4A5A6E;">
+        🔒 Après commande, vous configurez votre chatbot dans votre
+        <a href="{STREAMLIT_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">espace SupportAI</a>
+        &mdash; connexion sécurisée via Google.
       </p>"""
     else:
         demo_block = f"""
@@ -386,6 +392,11 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
         <a href="{CONFIGURATEUR_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">
           Voir le configurateur en direct
         </a>
+      </p>
+      <p style="margin:8px 0 0;font-size:12px;line-height:1.6;font-family:Arial,sans-serif;color:#4A5A6E;">
+        🔒 Après commande, vous configurez votre chatbot dans votre
+        <a href="{STREAMLIT_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">espace SupportAI</a>
+        &mdash; connexion sécurisée via Google.
       </p>"""
 
     return f"""<!DOCTYPE html>
@@ -947,7 +958,7 @@ def smtp_send(msg: MIMEMultipart, recipient: str) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑧  MASTER CSV — LECTURE / ÉCRITURE / TRACKING (mode MASS)
+#  ⑧  MASTER CSV - LECTURE / ÉCRITURE / TRACKING (mode MASS)
 # ════════════════════════════════════════════════════════════════════
 
 def load_master_csv() -> tuple[list[str], list[dict]]:
@@ -1011,7 +1022,7 @@ def mark_contact_sent(row: dict, subject: str, status: str = "sent", error: str 
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑨  MODE TEST — pitch complet à TEST_RECIPIENT
+#  ⑨  MODE TEST - pitch complet à TEST_RECIPIENT
 # ════════════════════════════════════════════════════════════════════
 
 def run_test(dry_run: bool) -> int:
@@ -1046,12 +1057,12 @@ def run_test(dry_run: bool) -> int:
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑩  MODE MASS — N prochains pending du master CSV
+#  ⑩  MODE MASS - N prochains pending du master CSV
 # ════════════════════════════════════════════════════════════════════
 
 def run_mass(dry_run: bool) -> int:
     est_min = DAILY_LIMIT * (PAUSE_MIN + PAUSE_MAX) / 2 / 60
-    print(f"  Mode    : MASS — limite {DAILY_LIMIT} emails")
+    print(f"  Mode    : MASS - limite {DAILY_LIMIT} emails")
     print(f"  Pauses  : {PAUSE_MIN}-{PAUSE_MAX}s (durée estimée ~{est_min:.0f} min)")
     print(f"  Master  : {MASTER_PATH}")
     print(f"{'='*70}\n")
@@ -1102,7 +1113,7 @@ def run_mass(dry_run: bool) -> int:
             # Auth KO = tous les envois suivants échoueraient aussi → on STOPPE
             # sans marquer le contact en error (il reste pending, retenté demain).
             print(f"   ❌ Auth SMTP KO : {e}")
-            print("   🛑 Arrêt immédiat — les contacts restants restent 'pending'.")
+            print("   🛑 Arrêt immédiat - les contacts restants restent 'pending'.")
             save_master_csv(fieldnames, all_rows)
             return 1
         except Exception as exc:
