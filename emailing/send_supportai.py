@@ -961,7 +961,7 @@ def smtp_send(msg: MIMEMultipart, recipient: str) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑧  MASTER CSV — LECTURE / ÉCRITURE / TRACKING (mode MASS)
+#  ⑧  MASTER CSV - LECTURE / ÉCRITURE / TRACKING (mode MASS)
 # ════════════════════════════════════════════════════════════════════
 
 def load_master_csv() -> tuple[list[str], list[dict]]:
@@ -1025,7 +1025,7 @@ def mark_contact_sent(row: dict, subject: str, status: str = "sent", error: str 
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑨  MODE TEST — pitch complet à TEST_RECIPIENT
+#  ⑨  MODE TEST - pitch complet à TEST_RECIPIENT
 # ════════════════════════════════════════════════════════════════════
 
 def run_test(dry_run: bool) -> int:
@@ -1060,12 +1060,12 @@ def run_test(dry_run: bool) -> int:
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑩  MODE MASS — N prochains pending du master CSV
+#  ⑩  MODE MASS - N prochains pending du master CSV
 # ════════════════════════════════════════════════════════════════════
 
 def run_mass(dry_run: bool) -> int:
     est_min = DAILY_LIMIT * (PAUSE_MIN + PAUSE_MAX) / 2 / 60
-    print(f"  Mode    : MASS — limite {DAILY_LIMIT} emails")
+    print(f"  Mode    : MASS - limite {DAILY_LIMIT} emails")
     print(f"  Pauses  : {PAUSE_MIN}-{PAUSE_MAX}s (durée estimée ~{est_min:.0f} min)")
     print(f"  Master  : {MASTER_PATH}")
     print(f"{'='*70}\n")
@@ -1116,7 +1116,7 @@ def run_mass(dry_run: bool) -> int:
             # Auth KO = tous les envois suivants échoueraient aussi → on STOPPE
             # sans marquer le contact en error (il reste pending, retenté demain).
             print(f"   ❌ Auth SMTP KO : {e}")
-            print("   🛑 Arrêt immédiat — les contacts restants restent 'pending'.")
+            print("   🛑 Arrêt immédiat - les contacts restants restent 'pending'.")
             save_master_csv(fieldnames, all_rows)
             return 1
         except Exception as exc:
