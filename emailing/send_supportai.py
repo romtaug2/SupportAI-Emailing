@@ -112,7 +112,7 @@ else:
 # Logo inline (PNG embarqué en CID, comme ThermoData)
 BASE_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = BASE_DIR / "Source"
-LOGO_WIDTH = 100
+LOGO_WIDTH = 120
 
 
 def _find_logo() -> Path | None:
@@ -287,15 +287,15 @@ DIFFÉRENCE CLÉ :
 - SupportAI : vraie compréhension du langage (LLM)
 
 TROIS FORMULES, ZÉRO ABONNEMENT :
-- Express 499€ : FAQ Q/R illimitées, vos couleurs, snippet à coller vous-même, formation visio + support email
-- Premium 799€ (le plus populaire) : tout Express + installation par nos soins (visio ou sur place) + support prolongé
+- Express 499€ : FAQ Q/R illimitées, vos couleurs, snippet à coller vous-même, formation vidéo + support email
+- Premium 799€ (le plus populaire) : tout Express + installation par nos soins (clé API sécurisée) + support prolongé
 - Code Source 1499€ : repo GitHub complet, white-label, revente autorisée
 
 COMMENT ÇA MARCHE - 4 ÉTAPES :
 1) Vous nous envoyez votre FAQ (Excel, mail, oral, peu importe)
 2) On structure la FAQ et on configure l'IA Gemini sur votre Google Sheet
 3) Démo vidéo du chatbot, vous validez
-4) Installation sur votre site + formation en visio. C'est en ligne.
+4) Installation sur votre site + formation vidéo. C'est en ligne.
 
 Solutions concurrentes : 30 à 200€/mois en abonnement (jusqu'à 2 400€/an).
 SupportAI : à partir de 499€, une fois. C'est tout.
@@ -355,7 +355,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
         </a>"""
         demo_block = f"""
       <p style="font-size:18px;font-weight:bold;color:#0A1F3D;margin:0 0 14px;font-family:Arial,sans-serif;letter-spacing:-0.3px;">
-        Voir SupportAI en action
+        Voir SupportAI en action (1 min)
       </p>
       {thumb_tag}
       <a href="{VIDEO_URL}"
@@ -658,7 +658,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
         <td width="36" valign="top" style="font-size:20px;line-height:1;">&#127891;</td>
         <td style="padding-left:10px;padding-bottom:12px;">
           <p style="font-size:13px;font-weight:bold;color:#0A1F3D;margin:0 0 3px;font-family:Arial,sans-serif;">
-            Formation en visio + support email inclus
+            Formation vidéo + support email inclus
           </p>
           <p style="font-size:12px;color:#6B7B8E;margin:0;line-height:1.7;font-family:Arial,sans-serif;">
             Vous savez modifier votre FAQ vous-même via Google Sheets. Le bot voit la nouvelle version en 5 min.
@@ -713,7 +713,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
               &#10003; FAQ Q/R illimitées<br>
               &#10003; Vos couleurs<br>
               &#10003; Snippet à coller vous-même<br>
-              &#10003; Formation visio + support
+              &#10003; Formation vidéo + support
             </p>
             <a href="{EXPRESS_URL}"
                style="display:inline-block;background:#F4F9FE;border:1px solid #2196F3;color:#1976D2;font-size:11px;font-weight:bold;padding:8px 14px;border-radius:999px;text-decoration:none;font-family:Arial,sans-serif;">
@@ -832,7 +832,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
         </td>
         <td style="padding-left:8px;">
           <p style="font-size:13px;color:#0A1F3D;margin:0;font-family:Arial,sans-serif;line-height:1.5;">
-            <strong>Étape 4 :</strong> Installation sur votre site + formation en visio. C'est en ligne.
+            <strong>Étape 4 :</strong> Installation sur votre site + formation vidéo. C'est en ligne.
           </p>
         </td>
       </tr>
@@ -961,7 +961,7 @@ def smtp_send(msg: MIMEMultipart, recipient: str) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑧  MASTER CSV - LECTURE / ÉCRITURE / TRACKING (mode MASS)
+#  ⑧  MASTER CSV — LECTURE / ÉCRITURE / TRACKING (mode MASS)
 # ════════════════════════════════════════════════════════════════════
 
 def load_master_csv() -> tuple[list[str], list[dict]]:
@@ -1025,7 +1025,7 @@ def mark_contact_sent(row: dict, subject: str, status: str = "sent", error: str 
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑨  MODE TEST - pitch complet à TEST_RECIPIENT
+#  ⑨  MODE TEST — pitch complet à TEST_RECIPIENT
 # ════════════════════════════════════════════════════════════════════
 
 def run_test(dry_run: bool) -> int:
@@ -1060,12 +1060,12 @@ def run_test(dry_run: bool) -> int:
 
 
 # ════════════════════════════════════════════════════════════════════
-#  ⑩  MODE MASS - N prochains pending du master CSV
+#  ⑩  MODE MASS — N prochains pending du master CSV
 # ════════════════════════════════════════════════════════════════════
 
 def run_mass(dry_run: bool) -> int:
     est_min = DAILY_LIMIT * (PAUSE_MIN + PAUSE_MAX) / 2 / 60
-    print(f"  Mode    : MASS - limite {DAILY_LIMIT} emails")
+    print(f"  Mode    : MASS — limite {DAILY_LIMIT} emails")
     print(f"  Pauses  : {PAUSE_MIN}-{PAUSE_MAX}s (durée estimée ~{est_min:.0f} min)")
     print(f"  Master  : {MASTER_PATH}")
     print(f"{'='*70}\n")
@@ -1116,7 +1116,7 @@ def run_mass(dry_run: bool) -> int:
             # Auth KO = tous les envois suivants échoueraient aussi → on STOPPE
             # sans marquer le contact en error (il reste pending, retenté demain).
             print(f"   ❌ Auth SMTP KO : {e}")
-            print("   🛑 Arrêt immédiat - les contacts restants restent 'pending'.")
+            print("   🛑 Arrêt immédiat — les contacts restants restent 'pending'.")
             save_master_csv(fieldnames, all_rows)
             return 1
         except Exception as exc:
