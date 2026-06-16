@@ -19,6 +19,7 @@ Tout le reste est hardcodé (config publique non sensible).
 import csv
 import os
 import random
+import re
 import ssl
 import smtplib
 import sys
@@ -95,6 +96,88 @@ VERTICAL_LABELS = {
 }
 DEFAULT_VERTICAL_LABEL = "Entreprises & indépendants"
 
+# Copy personnalisée par vertical (sinon tout le mail parle "boutique e-commerce").
+#   noun  : comment on nomme la structure          ("votre {noun}")
+#   client: comment on nomme leur public            ("vos {client}")
+#   kw    : mots-clés courts pour le greeting HTML
+#   q     : 3 questions types (texte brut, mode plain text)
+#   pain  : ce que tape un client (ligne italique HTML)
+#   hook  : 2e ligne du H1 (le coût du problème)
+VERTICAL_COPY = {
+    "ecommerce": {
+        "noun": "boutique", "client": "clients",
+        "kw": "délais, retours, paiement, livraison",
+        "q": ['"Quels sont vos délais de livraison ?"',
+              '"Comment retourner un article ?"',
+              '"Acceptez-vous le paiement en plusieurs fois ?"'],
+        "pain": '"délais de livraison Apple Pay"',
+        "hook": "1 panier sur 4 est abandonné",
+    },
+    "hotels": {
+        "noun": "hôtel", "client": "voyageurs",
+        "kw": "disponibilités, horaires, parking, animaux",
+        "q": ['"Avez-vous une chambre pour ces dates ?"',
+              '"À quelle heure est le check-in ?"',
+              '"Le parking et le petit-déjeuner sont-ils inclus ?"'],
+        "pain": '"chambre dispo parking inclus"',
+        "hook": "1 réservation sur 4 part à la concurrence",
+    },
+    "immo": {
+        "noun": "agence", "client": "prospects",
+        "kw": "biens disponibles, honoraires, visites",
+        "q": ['"Ce bien est-il toujours disponible ?"',
+              '"Quels sont vos honoraires d\'agence ?"',
+              '"Comment organiser une visite ?"'],
+        "pain": '"frais agence visite appartement"',
+        "hook": "1 prospect sur 4 va voir ailleurs",
+    },
+    "notaires": {
+        "noun": "étude", "client": "clients",
+        "kw": "pièces à fournir, délais, rendez-vous",
+        "q": ['"Quels documents dois-je fournir ?"',
+              '"Quel est le délai pour un acte ?"',
+              '"Comment prendre rendez-vous ?"'],
+        "pain": '"documents compromis de vente"',
+        "hook": "1 demande sur 4 reste sans réponse",
+    },
+    "education": {
+        "noun": "établissement", "client": "candidats",
+        "kw": "inscriptions, tarifs, dates de rentrée",
+        "q": ['"Comment m\'inscrire et jusqu\'à quand ?"',
+              '"Quels sont les tarifs et financements ?"',
+              '"Quelles sont les dates de rentrée ?"'],
+        "pain": '"dossier inscription date limite"',
+        "hook": "1 candidat sur 4 abandonne sa démarche",
+    },
+    "auto_ecole": {
+        "noun": "auto-école", "client": "élèves",
+        "kw": "tarifs, délais, financement CPF",
+        "q": ['"Combien coûte le forfait permis ?"',
+              '"Quels sont les délais pour une place d\'examen ?"',
+              '"Le permis est-il finançable avec le CPF ?"'],
+        "pain": '"prix forfait permis code inclus"',
+        "hook": "1 élève sur 4 s'inscrit ailleurs",
+    },
+    "france_travail": {
+        "noun": "organisme", "client": "candidats",
+        "kw": "financement CPF, dates de session, prérequis",
+        "q": ['"Cette formation est-elle finançable avec le CPF ?"',
+              '"Quelles sont les prochaines dates de session ?"',
+              '"Quels sont les prérequis ?"'],
+        "pain": '"formation finançable CPF dates"',
+        "hook": "1 candidat sur 4 abandonne en route",
+    },
+}
+DEFAULT_VERTICAL_COPY = {
+    "noun": "entreprise", "client": "clients",
+    "kw": "horaires, tarifs, prise de contact",
+    "q": ['"Quels sont vos horaires ?"',
+          '"Quels sont vos tarifs ?"',
+          '"Comment vous contacter ?"'],
+    "pain": '"horaires tarifs disponibilité"',
+    "hook": "1 client sur 4 va voir ailleurs",
+}
+
 # Identité légale - SIRET hardcodé (donnée publique : annuaire-entreprises.data.gouv.fr)
 SIRET = "88281366000025"
 SIRET_URL = f"https://annuaire-entreprises.data.gouv.fr/etablissement/{SIRET}"
@@ -158,6 +241,31 @@ def _format_company_id(value: str) -> str:
     if len(v) == 14:
         return f"{v[0:3]} {v[3:6]} {v[6:9]} {v[9:14]}"
     return value
+
+
+def _clean_company(raw: str) -> str:
+    """Nettoie un nom d'entreprise brut pour l'afficher dans le mail.
+    - retire les guillemets parasites du CSV
+    - coupe le baratin marketing au 1er séparateur ( - : | )
+    - TOUT EN MAJ -> Title Case (LE BOULANGER PARISIEN -> Le Boulanger Parisien)
+    - sinon force juste la 1re lettre en maj, garde le reste (WeBulk reste WeBulk)
+    """
+    name = (raw or "").strip().strip('"').strip()
+    if not name:
+        return ""
+    name = re.split(r"\s+[-:|\u2013\u2014]\s+", name)[0].strip()
+    if not name:
+        return ""
+    letters = [c for c in name if c.isalpha()]
+    if letters and all(c.isupper() for c in letters):
+        return name.title()
+    return name[0].upper() + name[1:]
+
+
+def _vcopy(contact: dict) -> dict:
+    """Renvoie le bloc de copy adapté à la vertical du contact."""
+    return VERTICAL_COPY.get((contact.get("vertical") or "").strip().lower(),
+                             DEFAULT_VERTICAL_COPY)
 
 
 # ── Loom (clone ThermoData) : miniature GIF animée auto-téléchargée ──
@@ -231,30 +339,32 @@ FAKE_CONTACT = {
 
 
 def _format_subject(contact: dict) -> str:
-    company = contact.get("company", "").strip()
+    company = _clean_company(contact.get("company", ""))
     if company:
         return f"🤖 {company} : un chatbot IA 24/7 clé en main"
     return "🤖 Un chatbot IA 24/7 clé en main pour votre service client"
 
 
 def _format_greeting(contact: dict) -> str:
-    company = contact.get("company", "").strip()
+    company = _clean_company(contact.get("company", ""))
     city = contact.get("city", "").strip()
+    v = _vcopy(contact)
+    client, kw = v["client"], v["kw"]
     if company and city:
         return (
-            f"<strong style=\"color:#0A1F3D;\">{company}</strong>, à {city} : vos clients vous posent "
-            "chaque jour les mêmes questions - <strong style=\"color:#0A1F3D;\">délais, retours, paiement, "
-            "tailles, livraison</strong>... Et chaque question restée sans réponse immédiate, "
-            "c'est un client qui hésite, puis qui part."
+            f"<strong style=\"color:#0A1F3D;\">{company}</strong>, à {city} : vos {client} vous posent "
+            f"chaque jour les mêmes questions - <strong style=\"color:#0A1F3D;\">{kw}</strong>... "
+            "Et chaque question restée sans réponse immédiate, "
+            f"c'est un {client[:-1] if client.endswith('s') else client} qui hésite, puis qui part."
         )
     if company:
         return (
-            f"<strong style=\"color:#0A1F3D;\">{company}</strong> : vos clients posent chaque jour "
-            "les mêmes questions - délais, retours, paiement... Chaque question sans réponse "
-            "immédiate, c'est un client qui hésite, puis qui part."
+            f"<strong style=\"color:#0A1F3D;\">{company}</strong> : vos {client} posent chaque jour "
+            f"les mêmes questions - {kw}... Chaque question sans réponse "
+            f"immédiate, c'est un {client[:-1] if client.endswith('s') else client} qui hésite, puis qui part."
         )
-    return ("Vos clients posent chaque jour les mêmes questions - délais, retours, paiement... "
-            "Chaque question sans réponse immédiate, c'est un client qui hésite, puis qui part.")
+    return (f"Vos {client} posent chaque jour les mêmes questions - {kw}... "
+            "Chaque question sans réponse immédiate, c'est une opportunité qui part.")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -262,21 +372,31 @@ def _format_greeting(contact: dict) -> str:
 # ════════════════════════════════════════════════════════════════════
 
 def _build_plain_text(contact: dict, unsubscribe_url: str) -> str:
-    company = contact.get("company", "")
+    company = _clean_company(contact.get("company", ""))
     city = contact.get("city", "")
+    v = _vcopy(contact)
     greeting = f"Bonjour{' ' + company if company else ''},"
+    intro = ""
+    if company:
+        lieu = f" à {city}" if city else ""
+        questions = ", ".join(v["q"])
+        noun = v["noun"]
+        # éviter "Votre hôtel Hôtel du parc" si le nom commence déjà par le noun
+        prefix = "" if company.lower().startswith(noun.lower()) else f"Votre {noun} "
+        intro = (f'{prefix}{company}{lieu} reçoit chaque jour '
+                 f'les mêmes questions : {questions}.')
 
     return f"""{greeting}
 
 SupportAI - L'assistant IA de votre service client
 
-{f'Votre boutique {company} à {city} reçoit chaque jour les mêmes questions : "Quels sont vos délais ?", "Comment retourner un article ?", "Acceptez-vous Apple Pay ?".' if company else ''}
+{intro}
 
-Aujourd'hui, vos clients tombent sur 2 options :
+Aujourd'hui, vos {v["client"]} tombent sur 2 options :
 1) Un chatbot classique qui fait de la reconnaissance de mots-clés
-   → 60% de questions sans réponse, frustration, panier abandonné
+   -> 60% de questions sans réponse, frustration, contact perdu
 2) Vous (ou votre équipe) qui répondez à la main
-   → Vous perdez 1-2h/jour à répéter les 20 mêmes questions
+   -> Vous perdez 1-2h/jour à répéter les 20 mêmes questions
 
 SupportAI installe sur votre site un vrai chatbot IA (propulsé par Gemini, Google)
 qui comprend les questions formulées en langage naturel et y répond à partir
@@ -329,6 +449,8 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
     date_str = _french_date()
     greeting_html = _format_greeting(contact)
     vertical_label = _vertical_label(contact)
+    v = _vcopy(contact)
+    h1_client, h1_hook, pain = v["client"], v["hook"], v["pain"]
 
     # Logo : PNG inline (CID) si dispo, sinon fallback texte stylisé
     if has_logo:
@@ -448,8 +570,8 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
       <!-- H1 -->
       <h1 style="font-size:24px;font-weight:bold;color:#0A1F3D;line-height:1.25;
                 margin:16px 0 8px;font-family:Arial,sans-serif;letter-spacing:-0.5px;">
-        60% des questions clients<br>restent sans réponse.<br>
-        <span style="color:#2196F3;">Et 1 panier sur 4 est abandonné<br>pour ça.</span>
+        60% des questions {h1_client}<br>restent sans réponse.<br>
+        <span style="color:#2196F3;">Et {h1_hook}<br>pour ça.</span>
       </h1>
 
       <!-- Bloc greeting personnalisé -->
@@ -460,7 +582,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
       </p>
 
       <p style="font-size:13px;color:#6B7B8E;font-style:italic;margin:0 0 18px;font-family:Arial,sans-serif;">
-        Vos clients tapent "délais Apple Pay" - votre chatbot répond "désolé je n'ai pas compris".
+        Vos {h1_client} tapent {pain} - votre chatbot répond "désolé je n'ai pas compris".
       </p>
 
       <p style="color:#4A5A6E;font-size:13px;line-height:1.7;margin:0 0 14px;font-family:Arial,sans-serif;">
@@ -594,7 +716,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
     <tr><td style="padding:14px 20px;text-align:center;">
       <p style="margin:0;font-size:13px;line-height:1.6;font-family:Arial,sans-serif;color:#4A5A6E;">
         <a href="{STREAMLIT_URL}" style="color:#1976D2;text-decoration:none;font-weight:bold;">Connexion Google disponible</a>
-        &mdash; Accédez à votre espace SupportAI en un clic, sans compte à créer.
+        - Accédez à votre espace SupportAI en un clic, sans compte à créer.
       </p>
     </td></tr>
     </table>
@@ -792,7 +914,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
 
       <p style="font-size:11px;font-weight:bold;text-transform:uppercase;
                 letter-spacing:1.2px;color:#6B7B8E;margin:0 0 16px;font-family:Arial,sans-serif;">
-        Comment ça marche &mdash; 4 étapes simples
+        Comment ça marche - 4 étapes simples
       </p>
 
       <table width="100%" cellpadding="0" cellspacing="0">
