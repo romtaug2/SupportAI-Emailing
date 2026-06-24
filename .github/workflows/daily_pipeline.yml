@@ -69,6 +69,11 @@ jobs:
       - name: 2/3 Master — fusion exports
         run: python emailing/build_master.py
 
+      # Garantit que le registre de suppression existe et contient les
+      # plaignants connus AVANT chaque envoi (idempotent, append-only).
+      - name: 2.5/3 Seed suppression — plaignants bloqués
+        run: python emailing/seed_suppression.py
+
       - name: 3/3 Envoi — MASS
         env:
           SEND_MODE: "MASS"
