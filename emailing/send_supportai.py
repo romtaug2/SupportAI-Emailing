@@ -84,6 +84,17 @@ PAUSE_MAX   = int(os.getenv("PAUSE_MAX") or 6)
 
 MASTER_PATH = Path(__file__).resolve().parent / "data" / "supportai_contacts_master.csv"
 
+# ── Registre de suppression (APPEND-ONLY, merge-safe) ────────────────
+#  Source de vérité du "ne jamais (re)contacter" : envois réussis,
+#  plaintes, désinscriptions, bounces. Append-only -> les commits ne
+#  rentrent jamais en conflit (git fusionne des ajouts), et c'est
+#  idempotent. Ce registre survit même si le master ne se persiste pas.
+#  Format : email,domain,reason,added_at
+#    - ligne "email" renseigné -> bloque cette adresse précise
+#    - ligne "domain" renseigné (email vide) -> bloque tout le domaine
+SUPPRESSION_PATH = Path(__file__).resolve().parent / "data" / "suppression.csv"
+SUPPRESSION_FIELDS = ["email", "domain", "reason", "added_at"]
+
 # Libellé du pill par vertical (header du mail, personnalisation légère)
 VERTICAL_LABELS = {
     "ecommerce":      "E-commerce indépendant",
@@ -1007,6 +1018,7 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
 
   <!-- Unsubscribe -->
   <tr><td style="padding-top:14px;text-align:center;">
+    <a href="{unsubscribe_url}" style="color:#94A3B8;font-size:12px;font-family:Arial,sans-serif;text-decoration:underline;">Se désinscrire — ne plus recevoir ces emails</a>
   </td></tr>
 
 </table>
@@ -1115,12 +1127,64 @@ def _is_valid_email(email: str) -> bool:
     return bool(email and "@" in email and "." in email.split("@")[-1])
 
 
-def pick_pending_contacts(rows: list[dict], limit: int) -> list[dict]:
-    """N prochains pending, triés par rank source décroissant (e-commerce d'abord)."""
+def _domain(email: str) -> str:
+    email = _safe(email).lower()
+    return email.split("@", 1)[1] if "@" in email else ""
+
+
+def load_suppression() -> tuple[set[str], set[str]]:
+    """Lit le registre -> (emails_supprimés, domaines_bloqués). Vide si absent."""
+    emails: set[str] = set()
+    domains: set[str] = set()
+    if not SUPPRESSION_PATH.exists():
+        return emails, domains
+    with SUPPRESSION_PATH.open("r", newline="", encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            e = _safe(row.get("email")).lower()
+            d = _safe(row.get("domain")).lower()
+            if e:
+                emails.add(e)
+            elif d:                       # domaine bloqué (ligne sans email précis)
+                domains.add(d)
+    return emails, domains
+
+
+def is_suppressed(email: str, sup_emails: set[str], sup_domains: set[str]) -> bool:
+    email = _safe(email).lower()
+    return bool(email) and (email in sup_emails or _domain(email) in sup_domains)
+
+
+def append_suppression(email: str, reason: str, block_domain: bool = False) -> None:
+    """Ajoute UNE ligne (append-only). block_domain=True -> bloque tout le domaine."""
+    email = _safe(email).lower()
+    if not email or "@" not in email:
+        return
+    SUPPRESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not SUPPRESSION_PATH.exists()
+    with SUPPRESSION_PATH.open("a", newline="", encoding="utf-8-sig") as fh:
+        w = csv.DictWriter(fh, fieldnames=SUPPRESSION_FIELDS)
+        if new_file:
+            w.writeheader()
+        w.writerow({
+            "email": "" if block_domain else email,
+            "domain": _domain(email) if block_domain else "",
+            "reason": reason,
+            "added_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+def pick_pending_contacts(rows: list[dict], limit: int,
+                          sup_emails: set[str] | None = None,
+                          sup_domains: set[str] | None = None) -> list[dict]:
+    """N prochains pending, triés par rank source décroissant (e-commerce d'abord).
+    Exclut tout contact présent dans le registre de suppression."""
+    sup_emails = sup_emails or set()
+    sup_domains = sup_domains or set()
     pending = [
         r for r in rows
         if _safe(r.get("send_status")).lower() == "pending"
         and _safe(r.get("email_sent")).lower() not in {"true", "1", "yes"}
+        and not is_suppressed(r.get("email"), sup_emails, sup_domains)
     ]
 
     def _key(r):
@@ -1193,12 +1257,15 @@ def run_mass(dry_run: bool) -> int:
     print(f"{'='*70}\n")
 
     fieldnames, all_rows = load_master_csv()
-    contacts = pick_pending_contacts(all_rows, DAILY_LIMIT)
+    sup_emails, sup_domains = load_suppression()
+    print(f"🚫 Suppression : {len(sup_emails)} emails + {len(sup_domains)} domaines bloqués")
+    contacts = pick_pending_contacts(all_rows, DAILY_LIMIT, sup_emails, sup_domains)
 
     total_pending = sum(
         1 for r in all_rows
         if _safe(r.get("send_status")).lower() == "pending"
         and _safe(r.get("email_sent")).lower() not in {"true", "1", "yes"}
+        and not is_suppressed(r.get("email"), sup_emails, sup_domains)
     )
     if not contacts:
         print("ℹ️  Aucun contact pending. Relance les scrapers (weekly.yml) pour réalimenter.")
@@ -1227,10 +1294,23 @@ def run_mass(dry_run: bool) -> int:
             print("   ❌ Email invalide")
             continue
 
+        # Garde-fou : ne jamais (re)contacter un email suppressé, même si le
+        # master était périmé. Ceinture + bretelles avec pick_pending_contacts.
+        if is_suppressed(email, sup_emails, sup_domains):
+            mark_contact_sent(contact, subject, status="suppressed", error="in suppression list")
+            save_master_csv(fieldnames, all_rows)
+            print("   🚫 Suppressé — ignoré")
+            continue
+
         try:
             msg = build_message(contact, email, subject)
             smtp_send(msg, email)
             mark_contact_sent(contact, subject, status="sent")
+            # On l'inscrit IMMÉDIATEMENT au registre append-only : c'est CE
+            # fichier (pas le master) qui garantit "une seule fois", même si
+            # le master ne se persiste pas entre deux runs.
+            append_suppression(email, "sent")
+            sup_emails.add(email)        # protège aussi le reste du run en cours
             save_master_csv(fieldnames, all_rows)
             sent_count += 1
             print("   ✅ Envoyé")
