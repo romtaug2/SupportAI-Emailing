@@ -83,7 +83,8 @@ jobs:
           git config user.name  "SupportAI Bot"
           git config user.email "bot@supportai.fr"
           git add data/notaires.db data/scrape_cursor.json exports/notaires/ \
-                  emailing/data/supportai_contacts_master.csv data/reports/ 2>/dev/null || true
+                  emailing/data/supportai_contacts_master.csv \
+                  emailing/data/suppression.csv data/reports/ 2>/dev/null || true
 
           if git diff --cached --quiet; then
             echo "ℹ️ Rien à committer"
