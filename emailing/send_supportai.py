@@ -1016,11 +1016,6 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
     </table>
   </td></tr>
 
-  <!-- Unsubscribe -->
-  <tr><td style="padding-top:14px;text-align:center;">
-    <a href="{unsubscribe_url}" style="color:#94A3B8;font-size:12px;font-family:Arial,sans-serif;text-decoration:underline;">Se désinscrire — ne plus recevoir ces emails</a>
-  </td></tr>
-
 </table>
 </td></tr>
 </table>
