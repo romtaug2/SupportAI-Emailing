@@ -442,8 +442,7 @@ Répondez à cet email pour démarrer : {CONTACT_EMAIL}
 SupportAI · {COMPANY_ID_LABEL} {_format_company_id(COMPANY_ID_VALUE)} · {ADRESSE_SOCIETE}
 Vérifier notre entreprise : {SIRET_URL}
 IA : Google Gemini · Conforme RGPD
-Prospection B2B · Intérêt légitime art. 6.1.f RGPD
-"""
+Prospection B2B · Intérêt légitime art. 6.1.f RGPD"""
 
 
 # ════════════════════════════════════════════════════════════════════
