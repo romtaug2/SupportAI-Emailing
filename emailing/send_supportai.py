@@ -194,7 +194,7 @@ SIRET = "88281366000025"
 SIRET_URL = f"https://annuaire-entreprises.data.gouv.fr/etablissement/{SIRET}"
 SIREN = os.getenv("SIREN", "").strip()
 ADRESSE_SOCIETE = os.getenv("ADRESSE_SOCIETE", "Lyon, France")
-BASE_UNSUBSCRIBE_URL = "https://supportai.fr/unsubscribe"
+# Désinscription gérée directement par Brevo (lien + header injectés à l'envoi)
 
 if SIRET:
     COMPANY_ID_LABEL, COMPANY_ID_VALUE = "SIRET", SIRET
@@ -382,7 +382,7 @@ def _format_greeting(contact: dict) -> str:
 #  ④  PLAIN TEXT (fallback)
 # ════════════════════════════════════════════════════════════════════
 
-def _build_plain_text(contact: dict, unsubscribe_url: str) -> str:
+def _build_plain_text(contact: dict) -> str:
     company = _clean_company(contact.get("company", ""))
     city = contact.get("city", "")
     v = _vcopy(contact)
@@ -437,7 +437,6 @@ Comment ça marche : {FONCTIONNEMENT_URL}
 Connexion Google disponible - Accédez à votre espace SupportAI en un clic, sans compte à créer : {STREAMLIT_URL}
 
 Répondez à cet email pour démarrer : {CONTACT_EMAIL}
-Désinscription : {unsubscribe_url}
 
 ---
 SupportAI · {COMPANY_ID_LABEL} {_format_company_id(COMPANY_ID_VALUE)} · {ADRESSE_SOCIETE}
@@ -456,7 +455,7 @@ def _vertical_label(contact: dict) -> str:
                                DEFAULT_VERTICAL_LABEL)
 
 
-def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has_thumb: bool = False) -> str:
+def _build_html(contact: dict, has_logo: bool = False, has_thumb: bool = False) -> str:
     date_str = _french_date()
     greeting_html = _format_greeting(contact)
     vertical_label = _vertical_label(contact)
@@ -1028,7 +1027,6 @@ def _build_html(contact: dict, unsubscribe_url: str, has_logo: bool = False, has
 # ════════════════════════════════════════════════════════════════════
 
 def build_message(contact: dict, recipient: str, subject: str) -> MIMEMultipart:
-    unsubscribe_url = f"{BASE_UNSUBSCRIBE_URL}?email={recipient}"
     logo_path = _find_logo()
     loom_thumb_data = _download_loom_gif(VIDEO_URL) if VIDEO_URL else None
 
@@ -1038,16 +1036,14 @@ def build_message(contact: dict, recipient: str, subject: str) -> MIMEMultipart:
     msg["Subject"] = subject
     msg["Reply-To"] = REPLY_TO
     msg["Message-ID"] = make_msgid(domain="supportai.fr")
-    msg.add_header("List-Unsubscribe", f"<{unsubscribe_url}>")
-    msg.add_header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
     msg["X-SupportAI-Pipeline"] = "mass" if SEND_MODE == "MASS" else "daily-test"
 
     related = MIMEMultipart("related")
     alternative = MIMEMultipart("alternative")
 
-    plain_body = _build_plain_text(contact, unsubscribe_url)
+    plain_body = _build_plain_text(contact)
     html_body = _build_html(
-        contact, unsubscribe_url,
+        contact,
         has_logo=bool(logo_path),
         has_thumb=bool(loom_thumb_data),
     )
@@ -1294,7 +1290,7 @@ def run_mass(dry_run: bool) -> int:
         if is_suppressed(email, sup_emails, sup_domains):
             mark_contact_sent(contact, subject, status="suppressed", error="in suppression list")
             save_master_csv(fieldnames, all_rows)
-            print("   🚫 Suppressé — ignoré")
+            print("   🚫 Suppressé - ignoré")
             continue
 
         try:
