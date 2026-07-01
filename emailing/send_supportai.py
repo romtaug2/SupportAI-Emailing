@@ -22,6 +22,7 @@ import random
 import re
 import ssl
 import smtplib
+import subprocess
 import sys
 import time
 import urllib.request
@@ -81,6 +82,10 @@ SEND_MODE   = os.getenv("SEND_MODE", "TEST").strip().upper()
 DAILY_LIMIT = int(os.getenv("DAILY_LIMIT") or 300)
 PAUSE_MIN   = int(os.getenv("PAUSE_MIN") or 2)
 PAUSE_MAX   = int(os.getenv("PAUSE_MAX") or 6)
+# Auto-persistance du registre : commit+push tous les N envois (et en fin de
+# run). Grave chaque envoi dans le repo SANS dépendre du commit du workflow,
+# donc un contact envoyé n'est jamais renvoyé, même si le pipeline plante.
+PERSIST_EVERY = int(os.getenv("PERSIST_EVERY") or 25)
 
 MASTER_PATH = Path(__file__).resolve().parent / "data" / "supportai_contacts_master.csv"
 
@@ -1163,6 +1168,45 @@ def append_suppression(email: str, reason: str, block_domain: bool = False) -> N
         })
 
 
+# Racine du repo (emailing/ -> repo). Sert au commit auto du registre.
+REPO_DIR = Path(__file__).resolve().parent.parent
+
+
+def _persist_suppression() -> None:
+    """Commit + push le registre de suppression (append-only -> zéro conflit).
+
+    Indépendant du commit du workflow : garantit qu'un email envoyé est
+    IMMÉDIATEMENT gravé dans le repo, donc jamais renvoyé, même si le reste
+    du pipeline échoue. Non bloquant et no-op propre en local (pas de remote,
+    pas de droits push) : on ne casse jamais un envoi pour un souci git.
+    """
+    try:
+        rel = str(SUPPRESSION_PATH.relative_to(REPO_DIR))
+    except ValueError:
+        rel = str(SUPPRESSION_PATH)
+    git = ["git", "-C", str(REPO_DIR),
+           "-c", "user.name=SupportAI Bot",
+           "-c", "user.email=bot@supportai.fr"]
+    try:
+        subprocess.run(git + ["add", rel], capture_output=True, text=True)
+        # Rien de nouveau à committer -> on sort proprement
+        if subprocess.run(git + ["diff", "--cached", "--quiet", "--", rel]).returncode == 0:
+            return
+        subprocess.run(git + ["commit", "-m", "chore: persist suppression (envois SupportAI)"],
+                       capture_output=True, text=True)
+        for _ in range(3):
+            if subprocess.run(git + ["push", "origin", "HEAD:main"],
+                              capture_output=True, text=True).returncode == 0:
+                print("   💾 Registre poussé sur le repo")
+                return
+            subprocess.run(git + ["pull", "--rebase", "--autostash", "origin", "main"],
+                           capture_output=True, text=True)
+            time.sleep(random.randint(3, 10))
+        print("   ⚠️ Push registre échoué après 3 tentatives (non bloquant)")
+    except Exception as exc:
+        print(f"   ⚠️ Persistance registre KO (non bloquant) : {exc}")
+
+
 def pick_pending_contacts(rows: list[dict], limit: int,
                           sup_emails: set[str] | None = None,
                           sup_domains: set[str] | None = None) -> list[dict]:
@@ -1304,12 +1348,17 @@ def run_mass(dry_run: bool) -> int:
             save_master_csv(fieldnames, all_rows)
             sent_count += 1
             print("   ✅ Envoyé")
+            # Grave l'envoi dans le repo par lots (append-only) : indépendant
+            # du commit du workflow -> jamais de renvoi même si le pipeline plante.
+            if sent_count % PERSIST_EVERY == 0:
+                _persist_suppression()
         except smtplib.SMTPAuthenticationError as e:
             # Auth KO = tous les envois suivants échoueraient aussi → on STOPPE
             # sans marquer le contact en error (il reste pending, retenté demain).
             print(f"   ❌ Auth SMTP KO : {e}")
             print("   🛑 Arrêt immédiat - les contacts restants restent 'pending'.")
             save_master_csv(fieldnames, all_rows)
+            _persist_suppression()   # grave ce qui a déjà été envoyé avant l'arrêt
             return 1
         except Exception as exc:
             mark_contact_sent(contact, subject, status="error", error=str(exc))
@@ -1326,6 +1375,7 @@ def run_mass(dry_run: bool) -> int:
     print(f"  RÉSULTAT : {sent_count} envoyés / {error_count} erreurs / {len(contacts)} tentés")
     print(f"  Pending restant : ~{total_pending - sent_count - error_count}")
     print(f"{'='*70}")
+    _persist_suppression()   # flush final : garantit que tout envoi est gravé
     return 0
 
 
