@@ -60,11 +60,33 @@ jobs:
         run: pip install -q requests beautifulsoup4 lxml openpyxl
 
       - name: 1/3 Récolte — tranche notaires
+        id: recolte_notaires
         if: ${{ github.event.inputs.slice_size != '0' }}
         env:
           SLICE_SIZE: ${{ github.event.inputs.slice_size || '300' }}
         run: python scrape_slice.py
         continue-on-error: true   # un échec de récolte ne bloque pas l'envoi
+
+      - name: Rapport récolte (visibilité)
+        if: always()
+        run: |
+          {
+            echo "## Récolte notaires"
+            if [ "${{ steps.recolte_notaires.outcome }}" = "failure" ]; then
+              echo "⚠️ **Récolte notaires en ÉCHEC** (Cloudflare / réseau). L'envoi continue mais la base n'a pas été enrichie."
+            else
+              echo "✅ Récolte notaires terminée sans erreur."
+            fi
+            python - <<'PY'
+          import sqlite3
+          try:
+              n = sqlite3.connect("data/notaires.db").execute(
+                  "SELECT COUNT(*) FROM notaires").fetchone()[0]
+              print(f"- Offices notaires en base : **{n}**")
+          except Exception as e:
+              print(f"- (compte indisponible : {e})")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 2/3 Master — fusion exports
         run: python emailing/build_master.py
