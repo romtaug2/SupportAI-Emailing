@@ -71,7 +71,7 @@ jobs:
           retention-days: 90
 
       - name: Committer exports et bases SQLite dans le repo
-        if: success()
+        if: always()   # sauve le travail déjà écrit même si un scraper timeout/plante
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
