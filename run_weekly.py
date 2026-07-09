@@ -27,7 +27,12 @@ from scrapers import REGISTRY
 REPORTS_DIR = Path(__file__).resolve().parent / "data" / "reports"
 
 # Gérés ailleurs (tranches quotidiennes incrémentales)
-DEFAULT_EXCLUDED = {"notaires"}
+#  - notaires      : scrape_slice.py    (daily_pipeline.yml)
+#  - france_travail: scrape_slice_ft.py (ft_slice.yml) — Playwright + non borné,
+#                    il faisait exploser le budget 6h du weekly et tout annulait.
+#  - education     : source morte (0 fiche) ET exclue de la prospection côté
+#                    build_master → inutile de la scraper ici.
+DEFAULT_EXCLUDED = {"notaires", "france_travail", "education"}
 
 
 def _env_bool(name: str) -> bool:
