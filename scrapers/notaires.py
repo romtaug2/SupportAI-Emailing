@@ -36,6 +36,16 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# notaires.fr est derrière Cloudflare : requests nu se fait bloquer (403 /
+# page challenge) depuis une IP datacenter (GitHub Actions). On passe donc
+# par curl_cffi avec empreinte TLS Chrome, exactement comme le scraper
+# education qui, lui, franchit Cloudflare sans problème.
+try:
+    from curl_cffi import requests as cffi_requests
+    HAS_CFFI = True
+except ImportError:
+    HAS_CFFI = False
+
 from core.scraper_base import ExportConfig, ScraperBase
 from core.utils import (
     clean_text,
@@ -98,6 +108,14 @@ HEADERS = {
         "image/avif,image/webp,*/*;q=0.8"
     ),
 }
+
+# Rotation légère entre deux empreintes Chrome récentes (comme education).
+IMPERSONATE_TARGETS = ["chrome146", "chrome133a"]
+
+# Backoff progressif sur 403/429 (IP datacenter = rate-limit rapide).
+BACKOFF_SCHEDULE = [10, 20, 40, 60, 90]
+STREAK_THRESHOLD = 3      # nb de refus d'affilée avant cooldown musclé
+STREAK_COOLDOWN = 90.0    # secondes
 
 
 # ---------------------------------------------------------------------------
@@ -211,29 +229,99 @@ class NotairesScraper(ScraperBase):
             self.max_pages = max_pages       # None = illimité
             self.max_offices = max_offices   # None = illimité
 
-        # Session persistante avec retry/backoff sur 429/5xx
-        self._session = requests.Session()
+        # Session persistante. curl_cffi (empreinte TLS Chrome) pour franchir
+        # Cloudflare ; fallback requests+retry si curl_cffi absent en local.
+        if HAS_CFFI:
+            self._session = cffi_requests.Session()
+        else:
+            self._session = requests.Session()
+            retry = Retry(
+                total=5,
+                connect=5,
+                read=5,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET"],
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            self._session.mount("http://", adapter)
+            self._session.mount("https://", adapter)
         self._session.headers.update(HEADERS)
-        retry = Retry(
-            total=5,
-            connect=5,
-            read=5,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        self._session.mount("http://", adapter)
-        self._session.mount("https://", adapter)
+
+        self._impersonate_idx = 0
+        self._consecutive_403 = 0
+        self._warmed_up = False
 
     # ------------------------------------------------------------------
     # HTTP
     # ------------------------------------------------------------------
 
-    def _fetch(self, url: str) -> str:
-        r = self._session.get(url, timeout=TIMEOUT)
-        r.raise_for_status()
-        return r.text
+    def _next_impersonate(self) -> str:
+        target = IMPERSONATE_TARGETS[self._impersonate_idx % len(IMPERSONATE_TARGETS)]
+        self._impersonate_idx += 1
+        return target
+
+    def _warm_up(self) -> None:
+        """Ouvre la home pour récupérer les cookies Cloudflare de session.
+        Sans ça, les premières requêtes depuis une IP datacenter sont
+        quasi systématiquement bloquées (403 / page challenge)."""
+        if self._warmed_up:
+            return
+        try:
+            self.log.info("Warm-up : GET %s", BASE_URL)
+            if HAS_CFFI:
+                self._session.get(
+                    BASE_URL, impersonate=self._next_impersonate(), timeout=TIMEOUT,
+                )
+            else:
+                self._session.get(BASE_URL, timeout=TIMEOUT)
+            time.sleep(random.uniform(2, 4))
+        except Exception as e:
+            self.log.warning("Warm-up échoué (non bloquant) : %s", e)
+        self._warmed_up = True
+
+    def _fetch(self, url: str, retries: int = 5) -> str:
+        """GET avec session persistante, empreinte Chrome, backoff long et
+        détection de streak de refus (identique au scraper education)."""
+        self._warm_up()
+
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                if HAS_CFFI:
+                    response = self._session.get(
+                        url, impersonate=self._next_impersonate(), timeout=TIMEOUT,
+                    )
+                else:
+                    response = self._session.get(url, timeout=TIMEOUT)
+
+                if response.status_code == 200:
+                    self._consecutive_403 = 0
+                    return response.text
+
+                last_error = f"HTTP {response.status_code}"
+                if response.status_code in (403, 429):
+                    self._consecutive_403 += 1
+                    if self._consecutive_403 >= STREAK_THRESHOLD:
+                        self.log.warning(
+                            "Streak de %d refus → cooldown %ds",
+                            self._consecutive_403, STREAK_COOLDOWN,
+                        )
+                        time.sleep(STREAK_COOLDOWN)
+                        self._consecutive_403 = 0
+
+            except Exception as e:
+                last_error = repr(e)
+
+            wait = BACKOFF_SCHEDULE[min(attempt - 1, len(BACKOFF_SCHEDULE) - 1)]
+            wait = wait + random.uniform(0, wait * 0.2)
+            self.log.warning(
+                "Erreur fetch %d/%d sur %s : %s. Pause %.1fs",
+                attempt, retries, url, last_error, wait,
+            )
+            time.sleep(wait)
+
+        raise RuntimeError(f"Impossible de récupérer {url} : {last_error}")
 
     # ------------------------------------------------------------------
     # ÉTAPE 1 : crawl de l'annuaire
