@@ -58,18 +58,30 @@ def main() -> int:
     summary: dict[str, dict] = {}
     exit_code = 0
 
+    # INCRÉMENTAL (défaut) : on ne refetch que les fiches NOUVELLES. Les fiches
+    # déjà en base sont sautées → le run passe de ~5h à ~30-40 min et ne
+    # consomme plus le budget Actions. PB_INCREMENTAL=false → refresh complet
+    # historique (refetch de tout + mark_stale), à lancer 1 fois par trimestre.
+    incremental = (os.getenv("PB_INCREMENTAL") or "true").strip().lower() in {"1", "true", "yes", "on"}
+    print(f"   Mode : {'INCRÉMENTAL (nouvelles fiches seulement)' if incremental else 'COMPLET (refetch + stale)'}\n")
+
     for v in verticals:
         print(f"{'='*70}\n▶ {v}\n{'='*70}")
         try:
             scraper = REGISTRY[v](test_mode=test_mode)
-            result = scraper.run(mode="update")
+            if incremental:
+                scraper.skip_keys = scraper.load_known_keys()
+                print(f"   {len(scraper.skip_keys)} fiches déjà en base (skip auto)")
+            result = scraper.run(mode="create" if incremental else "update")
             summary[v] = {
                 "status": "ok",
                 "inserted": result.inserted,
                 "updated": result.updated,
                 "unchanged": result.unchanged,
+                "skipped_known": scraper.skipped_known,
             }
-            print(f"✅ {v} : +{result.inserted} / ~{result.updated} / ={result.unchanged}")
+            print(f"✅ {v} : +{result.inserted} / ~{result.updated} / ={result.unchanged}"
+                  f" / {scraper.skipped_known} sautés")
         except Exception as exc:
             summary[v] = {"status": "error", "error": repr(exc)}
             exit_code = 1
@@ -80,6 +92,7 @@ def main() -> int:
         "started_at": started.isoformat(),
         "ended_at": ended.isoformat(),
         "test_mode": test_mode,
+        "incremental": incremental,
         "verticals": verticals,
         "summary": summary,
         "exit_code": exit_code,
