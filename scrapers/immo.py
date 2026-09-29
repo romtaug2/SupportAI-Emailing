@@ -282,6 +282,8 @@ class ImmoScraper(ScraperBase):
                 if item["detail_url"] in seen_urls:
                     continue
                 seen_urls.add(item["detail_url"])
+                if self.is_known(item["detail_url"]):   # incrémental : déjà en base
+                    continue
 
                 detail = self._parse_detail_page(item["detail_url"])
 
