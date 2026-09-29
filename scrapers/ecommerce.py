@@ -529,6 +529,8 @@ class EcommerceScraper(ScraperBase):
 
                 for shop in shops:
                     shop_url = shop["shop_url"]
+                    if self.is_known(shop_url):      # incrémental : déjà en base
+                        continue
                     row = self._make_row(category, page_num, page_url, shop)
 
                     try:
