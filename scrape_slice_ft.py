@@ -3,7 +3,8 @@
 ║   SUPPORTAI - SCRAPE SLICE FRANCE TRAVAIL (récolte quotidienne)  ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Scrape UN département de France Travail à chaque run :          ║
-║   - 1 département à la fois (curseur dans data/ft_cursor.json)   ║
+║   - N départements par run (FT_DEPTS_PER_RUN, défaut 3), curseur ║
+║     dans data/ft_cursor.json, sauvé après CHAQUE département     ║
 ║   - mode "create" → AUCUN marquage stale (upsert additif pur),   ║
 ║     l'export re-dumpe toute la table → la base ne fait que       ║
 ║     grossir (cf. core.scraper_base.export_files).                ║
@@ -32,6 +33,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +45,10 @@ CURSOR_PATH = BASE_DIR / "data" / "ft_cursor.json"
 FT_MAX_PAGES = int(os.getenv("FT_MAX_PAGES") or 12)
 FT_ENRICH = (os.getenv("FT_ENRICH") or "true").strip().lower() in {"1", "true", "yes", "on"}
 FT_MAX_ENRICH = int(os.getenv("FT_MAX_ENRICH") or 40)
+# Plusieurs départements par run (chacun est court en incrémental) + garde-fou
+# temps : on n'ENTAME pas un nouveau département au-delà du budget.
+FT_DEPTS_PER_RUN = max(1, int(os.getenv("FT_DEPTS_PER_RUN") or 3))
+FT_TIME_BUDGET_MIN = float(os.getenv("FT_TIME_BUDGET_MIN") or 20)
 
 
 def _load_cursor() -> dict:
@@ -61,39 +67,62 @@ def _save_cursor(cur: dict) -> None:
 
 
 def main() -> int:
+    t0 = time.monotonic()
     cursor = _load_cursor()
     idx = int(cursor.get("ft_dept_idx", 0)) % len(DEPARTEMENTS_FULL)
-    dept = DEPARTEMENTS_FULL[idx]
 
     print(f"\n🔪 Scrape slice france_travail — {datetime.now(timezone.utc).isoformat()}")
-    print(f"   Département : [{idx + 1}/{len(DEPARTEMENTS_FULL)}] {dept}")
-    print(f"   Cap pages   : {FT_MAX_PAGES} pages listing max")
-    print(f"   Enrichir    : {FT_ENRICH} (max {FT_MAX_ENRICH} sites)\n")
+    print(f"   Départements : {FT_DEPTS_PER_RUN} max par run (budget {FT_TIME_BUDGET_MIN:.0f} min)")
+    print(f"   Cap pages    : {FT_MAX_PAGES} pages listing max / département")
+    print(f"   Enrichir     : {FT_ENRICH} (max {FT_MAX_ENRICH} sites)")
+    print(f"   Incrémental  : fiches déjà en base non refetchées\n")
 
-    scraper = FranceTravailScraper(
-        test_mode=False,
-        zones=[dept],                 # 1 seul département → run borné
-        max_pages=FT_MAX_PAGES,       # cap temps d'exécution
-        enrich_emails=FT_ENRICH,
-        max_enrichments=FT_MAX_ENRICH,
-    )
+    total_inserted = total_updated = 0
+    done = 0
 
-    try:
-        # additif pur : PAS de mark_stale → l'export cumule tous les départements
-        result = scraper.run(mode="create")
-    except Exception as exc:
-        # Échec réseau/site : on n'avance PAS le curseur, retentera au prochain run.
-        print(f"❌ Slice en erreur : {exc!r} — curseur inchangé (même département demain).")
-        return 1
+    for _ in range(FT_DEPTS_PER_RUN):
+        elapsed_min = (time.monotonic() - t0) / 60
+        if done and elapsed_min >= FT_TIME_BUDGET_MIN:
+            print(f"⏱️  Budget temps atteint ({elapsed_min:.1f} min) → on s'arrête ici.")
+            break
 
-    print(f"\n📊 Slice : +{result.inserted} nouveaux / ~{result.updated} maj / ={result.unchanged}")
+        dept = DEPARTEMENTS_FULL[idx]
+        print(f"── Département [{idx + 1}/{len(DEPARTEMENTS_FULL)}] {dept}")
 
-    # Un département par run : on avance systématiquement au suivant (boucle).
-    next_idx = (idx + 1) % len(DEPARTEMENTS_FULL)
-    cursor["ft_dept_idx"] = next_idx
-    _save_cursor(cursor)
-    print(f"➡️  Prochain run : département "
-          f"[{next_idx + 1}/{len(DEPARTEMENTS_FULL)}] {DEPARTEMENTS_FULL[next_idx]}")
+        scraper = FranceTravailScraper(
+            test_mode=False,
+            zones=[dept],                 # 1 département à la fois → borné
+            max_pages=FT_MAX_PAGES,       # cap temps d'exécution
+            enrich_emails=FT_ENRICH,
+            max_enrichments=FT_MAX_ENRICH,
+        )
+        scraper.skip_keys = scraper.load_known_keys()   # incrémental
+        print(f"   En base : {len(scraper.skip_keys)} fiches connues (skip auto)")
+
+        try:
+            # additif pur : PAS de mark_stale → l'export cumule tous les départements
+            result = scraper.run(mode="create")
+        except Exception as exc:
+            # Échec réseau/site : curseur INCHANGÉ sur ce département, on garde
+            # ce qui a déjà été fait dans ce run (curseur déjà sauvé par dept).
+            print(f"❌ Slice en erreur sur {dept} : {exc!r} — curseur inchangé "
+                  f"(même département au prochain run).")
+            return 1 if not done else 0
+
+        print(f"   📊 {dept} : +{result.inserted} nouveaux / ~{result.updated} maj / "
+              f"={result.unchanged} / {scraper.skipped_known} sautés")
+        total_inserted += result.inserted
+        total_updated += result.updated
+        done += 1
+
+        # Curseur avancé et SAUVÉ après chaque département réussi.
+        idx = (idx + 1) % len(DEPARTEMENTS_FULL)
+        cursor["ft_dept_idx"] = idx
+        _save_cursor(cursor)
+
+    print(f"\n📊 Run : {done} département(s), +{total_inserted} nouveaux / ~{total_updated} maj "
+          f"en {(time.monotonic() - t0) / 60:.1f} min")
+    print(f"➡️  Prochain run : département [{idx + 1}/{len(DEPARTEMENTS_FULL)}] {DEPARTEMENTS_FULL[idx]}")
     return 0
 
 
