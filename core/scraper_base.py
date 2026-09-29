@@ -77,6 +77,46 @@ class ScraperBase:
         if self.EXPORT is None:
             raise ValueError(f"{self.VERTICAL}: EXPORT config manquante")
 
+        #: Mode INCRÉMENTAL : clés naturelles déjà en base. Un scraper qui le
+        #: supporte appelle self.is_known(clé) AVANT de fetcher une fiche
+        #: détail et la saute → un run hebdo ne coûte plus que le crawl des
+        #: listings + les fiches NOUVELLES (≈ 30 min au lieu de 5h).
+        #: Rempli via load_known_keys() (run_weekly / scrape_slice_*).
+        #: Vide = comportement historique (tout est refetché).
+        self.skip_keys: set[str] = set()
+        self.skipped_known: int = 0
+
+    # ------------------------------------------------------------------
+    # Incrémental
+    # ------------------------------------------------------------------
+
+    def load_known_keys(self) -> set[str]:
+        """Clés naturelles déjà présentes dans la table (toutes, actives ou non)."""
+        if not self.db_path.exists():
+            return set()
+        try:
+            with closing(db.connect(self.db_path)) as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (self.TABLE,),
+                ).fetchone()
+                if not exists:
+                    return set()
+                return {str(r[0]) for r in conn.execute(
+                    f"SELECT natural_key FROM {self.TABLE}") if r[0]}
+        except Exception as exc:  # jamais bloquant : on refetch tout
+            self.log.warning("load_known_keys impossible (%r) → mode complet", exc)
+            return set()
+
+    def is_known(self, key) -> bool:
+        """True si la fiche est déjà en base ET que le mode incrémental est actif."""
+        if not self.skip_keys or not key:
+            return False
+        if str(key) in self.skip_keys:
+            self.skipped_known += 1
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Méthodes à implémenter par chaque scraper
     # ------------------------------------------------------------------
@@ -135,8 +175,17 @@ class ScraperBase:
                 if batch:
                     self._flush(conn, batch, run_id, result)
 
-                if mode == "update":
+                if self.skipped_known:
+                    self.log.info("Incrémental : %d fiches déjà en base sautées "
+                                  "(non refetchées)", self.skipped_known)
+
+                # En incrémental, les fiches sautées n'ont pas été "vues" par ce
+                # run : mark_stale les désactiverait toutes. On ne le fait donc
+                # QUE si aucune clé n'a été sautée (run complet).
+                if mode == "update" and not self.skip_keys:
                     stale = db.mark_stale(conn, self.TABLE, run_id)
+                elif mode == "update":
+                    self.log.info("Incrémental : mark_stale ignoré (fiches sautées)")
 
             except KeyboardInterrupt:
                 status = "interrupted"
