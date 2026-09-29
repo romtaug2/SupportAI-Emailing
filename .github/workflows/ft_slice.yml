@@ -1,8 +1,10 @@
 # ═══════════════════════════════════════════════════════════════
 #  SupportAI — Tranche quotidienne FRANCE TRAVAIL (Playwright)
-#  1 département par run, borné (~15-25 min), isolé du pipeline
+#  N départements par run (défaut 3), incrémental (fiches connues
+#  sautées), borné par budget temps (20 min, job 45 max), isolé du pipeline
 #  quotidien qui envoie les emails (celui-ci ne fait QUE récolter).
-#   - scrape_slice_ft.py : 1 dept via curseur data/ft_cursor.json
+#   - scrape_slice_ft.py : N depts via curseur data/ft_cursor.json
+#     (pagination corrigée : range ignoré → clic 'plus/suivant')
 #   - commit : france_travail.db + exports/france_travail/ + curseur
 #  Les nouveaux emails sont intégrés au master par build_master.py
 #  lors du run suivant du pipeline quotidien (il lit exports/).
@@ -28,6 +30,14 @@ on:
         default: "true"
         type: choice
         options: ["true", "false"]
+      ft_depts_per_run:
+        description: "Départements par run (défaut 3)"
+        required: false
+        default: "3"
+      ft_time_budget_min:
+        description: "Budget temps en minutes avant d'arrêter d'entamer un département (défaut 20)"
+        required: false
+        default: "20"
 
 permissions:
   contents: write
@@ -59,10 +69,12 @@ jobs:
       - name: Installer Chromium pour Playwright
         run: python -m playwright install --with-deps chromium
 
-      - name: Récolte — tranche france_travail (1 département)
+      - name: Récolte — tranche france_travail (N départements, incrémental)
         env:
           FT_MAX_PAGES: ${{ github.event.inputs.ft_max_pages || '12' }}
           FT_ENRICH: ${{ github.event.inputs.ft_enrich || 'true' }}
+          FT_DEPTS_PER_RUN: ${{ github.event.inputs.ft_depts_per_run || '3' }}
+          FT_TIME_BUDGET_MIN: ${{ github.event.inputs.ft_time_budget_min || '20' }}
         run: python scrape_slice_ft.py
 
       - name: Committer base + exports + curseur
