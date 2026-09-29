@@ -1,6 +1,7 @@
 name: Run hebdomadaire
 
-# Lancement automatique tous les lundis à 06:00 UTC (08:00 Paris été, 07:00 hiver)
+# Lancement automatique tous les dimanches à 06:00 UTC (08:00 Paris été, 07:00 hiver)
+# Mode INCRÉMENTAL par défaut : seules les fiches nouvelles sont fetchées (~30-40 min).
 # + bouton manuel dans l'onglet Actions
 on:
   schedule:
@@ -17,6 +18,12 @@ on:
         description: "Verticals à lancer (vide = tous, sinon a,b,c)"
         required: false
         default: ""
+      full_refresh:
+        description: "Refresh COMPLET (refetch de tout + stale, ~5h) au lieu de l'incrémental ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 permissions:
   contents: write
@@ -48,6 +55,9 @@ jobs:
         env:
           PB_TEST: ${{ github.event.inputs.test_mode }}
           PB_VERTICALS: ${{ github.event.inputs.verticals }}
+          # Incrémental par défaut (nouvelles fiches seulement, ~30-40 min).
+          # full_refresh=true → refetch complet historique (~5h).
+          PB_INCREMENTAL: ${{ github.event.inputs.full_refresh == 'true' && 'false' || 'true' }}
         run: python run_weekly.py
 
       - name: Uploader logs et rapports
