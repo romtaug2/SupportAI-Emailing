@@ -421,6 +421,8 @@ class AutoEcoleScraper(ScraperBase):
 
             # 3. Pour chaque fiche : on yield le dict complet
             for f_idx, fiche_url in enumerate(fiches_urls, start=1):
+                if self.is_known(fiche_url):         # incrémental : déjà en base
+                    continue
                 try:
                     fiche_html = self._fetch(fiche_url)
                     if not fiche_html:
