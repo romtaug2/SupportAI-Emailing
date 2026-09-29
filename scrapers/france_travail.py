@@ -198,6 +198,53 @@ class FranceTravailScraper(ScraperBase):
             })
         return items
 
+    async def _click_load_more(self, page) -> bool:
+        """Pagination de secours : clique un bouton/lien "Afficher plus",
+        "Voir plus de résultats", "Suivant"… Retourne True si un clic a chargé
+        quelque chose sans quitter le listing. Jamais bloquant."""
+        button_re = re.compile(
+            r"(afficher|voir|charger)\s.*(plus|suivant)|r[ée]sultats\s+suivants"
+            r"|plus\s+de\s+(r[ée]sultats|formations)|^\s*suivante?\s*[»>]?\s*$",
+            re.I,
+        )
+        candidates = [
+            page.get_by_role("button", name=button_re),
+            page.get_by_role("link", name=button_re),
+            page.locator(
+                "a[rel='next'], li.next a, .pagination a[aria-label*='uivant'], "
+                "button[aria-label*='uivant'], a[aria-label*='uivant']"
+            ),
+        ]
+        for loc in candidates:
+            try:
+                count = await loc.count()
+            except Exception:
+                continue
+            for i in range(min(count, 3)):
+                el = loc.nth(i)
+                try:
+                    if not await el.is_visible():
+                        continue
+                    await el.scroll_into_view_if_needed(timeout=5000)
+                    await el.click(timeout=10000)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=30000)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(2000)
+                    if "/formations/detail/" in page.url:
+                        # Mauvais clic (fiche ouverte) → retour et candidat suivant
+                        try:
+                            await page.go_back(wait_until="networkidle", timeout=30000)
+                        except Exception:
+                            pass
+                        continue
+                    return True
+                except Exception as e:
+                    self.log.debug("Clic pagination KO : %s", e)
+                    continue
+        return False
+
     async def _extract_visible_external_sites(self, page):
         links = await page.locator("a[href]").evaluate_all(
             """els => els.map(a => ({
@@ -407,35 +454,65 @@ class FranceTravailScraper(ScraperBase):
                 self.log.info("=" * 40)
                 self.log.info("ZONE %s", zone)
                 empty = 0
+                seen_zone: set[str] = set()   # url_detail déjà vus dans cette zone
+                pagination = "range"          # "range" (URL) → "bouton" (clic) → fin
+                page_index = 0
 
-                for page_index in range(self.max_pages):
+                while page_index < self.max_pages:
                     start = page_index * 10
                     end = start + 9
                     url = BASE_SEARCH_URL.format(zone=zone, start=start, end=end)
-                    self.log.info("[%s] listing page %d range %d-%d",
-                                  zone, page_index + 1, start, end)
 
-                    try:
-                        await listing_page.goto(url, wait_until="networkidle", timeout=90000)
-                        await listing_page.wait_for_timeout(2000)
-                    except Exception as e:
-                        self.log.warning("Listing impossible : %s", e)
-                        empty += 1
-                        if empty >= 3:
+                    if pagination == "range":
+                        self.log.info("[%s] listing page %d range %d-%d",
+                                      zone, page_index + 1, start, end)
+                        try:
+                            await listing_page.goto(url, wait_until="networkidle", timeout=90000)
+                            await listing_page.wait_for_timeout(2000)
+                        except Exception as e:
+                            self.log.warning("Listing impossible : %s", e)
+                            empty += 1
+                            if empty >= 3:
+                                break
+                            page_index += 1
+                            continue
+                    else:
+                        # Le site a ignoré `range` : on pagine en cliquant
+                        # "Afficher plus / Suivant" sur la page déjà chargée.
+                        self.log.info("[%s] listing page %d via bouton plus/suivant",
+                                      zone, page_index + 1)
+                        if not await self._click_load_more(listing_page):
+                            self.log.info("[%s] Pas de bouton de pagination → fin de zone", zone)
                             break
-                        continue
 
                     items = await self._extract_listing_items(listing_page, url)
-                    self.log.info("[%s] %d fiches détectées", zone, len(items))
+                    new_items = [it for it in items if it["url_detail"] not in seen_zone]
+                    self.log.info("[%s] %d fiches détectées, %d nouvelles sur cette page",
+                                  zone, len(items), len(new_items))
 
                     if not items:
                         empty += 1
                         if empty >= 3:
                             break
+                        page_index += 1
                         continue
                     empty = 0
 
-                    for idx, item in enumerate(items, start=1):
+                    if not new_items:
+                        if pagination == "range" and page_index > 0:
+                            # Même page servie quel que soit `range` (constaté en
+                            # prod : 12 pages lues, 10 fiches uniques) → bascule.
+                            self.log.info("[%s] range=%d-%d ignoré par le site → "
+                                          "bascule sur le bouton de pagination", zone, start, end)
+                            pagination = "bouton"
+                            continue          # même page_index, on clique
+                        self.log.info("[%s] Plus aucune nouvelle fiche → fin de zone", zone)
+                        break
+
+                    for item in new_items:
+                        seen_zone.add(item["url_detail"])
+                        if self.is_known(item["url_detail"]):   # incrémental : déjà en base
+                            continue
                         row = await self._parse_detail_page(
                             context=context,
                             url_detail=item["url_detail"],
@@ -444,6 +521,8 @@ class FranceTravailScraper(ScraperBase):
                         )
                         buffered_rows.append(row)
                         await _sleep_between(DETAIL_SLEEP_MIN, DETAIL_SLEEP_MAX)
+
+                    page_index += 1
 
             await listing_page.close()
 
