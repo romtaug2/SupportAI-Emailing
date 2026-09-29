@@ -1207,19 +1207,47 @@ def _persist_suppression() -> None:
         print(f"   ⚠️ Persistance registre KO (non bloquant) : {exc}")
 
 
+# ── Adresses à risque : jamais prospectées ────────────────────────────
+#  Boîtes RGPD/juridique/médiation/presse/RH : ce sont exactement celles
+#  qui portent plainte (cf. "menace AFNIC" dans le registre). Filtrées à
+#  la sélection ET au moment de l'envoi (ceinture + bretelles).
+#  Le préfixe doit être un "mot" entier : press@ / presse@ / press.office@
+#  sont bloqués, pressing-dupont@ ne l'est pas.
+_RISKY_LOCAL_RE = re.compile(
+    r"^(?:privacy\w*|rgpd\w*|dpo|legal\w*|juridique\w*|saisine\w*|mediat\w*|"
+    r"relationconso\w*|reclamations?|jobs?|presse?|abuse|postmaster|no-?reply)"
+    r"(?:[._+\-]|$)"
+)
+RISKY_DOMAINS = {"exemple.com", "example.com", "fevad.com"}
+
+
+def _is_risky(email: str) -> bool:
+    """True si l'adresse ne doit jamais être prospectée (préfixe ou domaine)."""
+    local, _, dom = _safe(email).lower().partition("@")
+    return bool(_RISKY_LOCAL_RE.match(local)) or dom in RISKY_DOMAINS
+
+
+def _is_sendable(row: dict, sup_emails: set[str], sup_domains: set[str]) -> bool:
+    """Règle unique 'ce contact peut partir aujourd'hui' (sélection + comptage)."""
+    email = _safe(row.get("email"))
+    return (
+        _safe(row.get("send_status")).lower() == "pending"
+        and _safe(row.get("email_sent")).lower() not in {"true", "1", "yes"}
+        and _is_valid_email(email)
+        and not is_suppressed(email, sup_emails, sup_domains)
+        and not _is_risky(email)
+    )
+
+
 def pick_pending_contacts(rows: list[dict], limit: int,
                           sup_emails: set[str] | None = None,
                           sup_domains: set[str] | None = None) -> list[dict]:
     """N prochains pending, triés par rank source décroissant (e-commerce d'abord).
-    Exclut tout contact présent dans le registre de suppression."""
+    Exclut tout contact présent dans le registre de suppression, invalide
+    ou à risque (préfixes RGPD/juridique/presse, domaines bidon)."""
     sup_emails = sup_emails or set()
     sup_domains = sup_domains or set()
-    pending = [
-        r for r in rows
-        if _safe(r.get("send_status")).lower() == "pending"
-        and _safe(r.get("email_sent")).lower() not in {"true", "1", "yes"}
-        and not is_suppressed(r.get("email"), sup_emails, sup_domains)
-    ]
+    pending = [r for r in rows if _is_sendable(r, sup_emails, sup_domains)]
 
     def _key(r):
         try:
@@ -1295,17 +1323,22 @@ def run_mass(dry_run: bool) -> int:
     print(f"🚫 Suppression : {len(sup_emails)} emails + {len(sup_domains)} domaines bloqués")
     contacts = pick_pending_contacts(all_rows, DAILY_LIMIT, sup_emails, sup_domains)
 
-    total_pending = sum(
+    total_pending = sum(1 for r in all_rows if _is_sendable(r, sup_emails, sup_domains))
+    n_risky = sum(
         1 for r in all_rows
         if _safe(r.get("send_status")).lower() == "pending"
-        and _safe(r.get("email_sent")).lower() not in {"true", "1", "yes"}
+        and _is_risky(r.get("email"))
         and not is_suppressed(r.get("email"), sup_emails, sup_domains)
     )
+    if n_risky:
+        print(f"🛡️  {n_risky} adresses à risque écartées (privacy@, rgpd@, legal@, presse, domaines bidon...)")
     if not contacts:
         print("ℹ️  Aucun contact pending. Relance les scrapers (weekly.yml) pour réalimenter.")
         return 0
 
     print(f"📋 {len(contacts)} sélectionnés / {total_pending} pending / {len(all_rows)} total")
+    print(f"⏳ Stock après ce run : ~{max(total_pending - len(contacts), 0)} contacts "
+          f"(≈ {max(total_pending - len(contacts), 0) / max(DAILY_LIMIT, 1):.1f} jours)")
 
     sent_count = error_count = 0
 
@@ -1334,6 +1367,17 @@ def run_mass(dry_run: bool) -> int:
             mark_contact_sent(contact, subject, status="suppressed", error="in suppression list")
             save_master_csv(fieldnames, all_rows)
             print("   🚫 Suppressé - ignoré")
+            continue
+
+        # Garde-fou : adresse à risque (RGPD/juridique/presse/domaine bidon).
+        # Marquée 'skipped' (pas 'error') et inscrite au registre pour ne
+        # jamais réapparaître dans un pending.
+        if _is_risky(email):
+            mark_contact_sent(contact, subject, status="skipped", error="risky address")
+            append_suppression(email, "skipped - adresse a risque")
+            sup_emails.add(email)
+            save_master_csv(fieldnames, all_rows)
+            print("   🛡️ Adresse à risque - ignorée")
             continue
 
         try:
