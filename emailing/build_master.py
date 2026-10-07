@@ -36,6 +36,7 @@ SOURCES = [
     ("hotels",         "hotels/base_prospection_trouve_ton_hotel.csv",  "email_principal", ["emails_trouves"],  "nom",                    "ville", 6),
     ("immo",           "immo/base_prospection_immomatin.csv",           "email_principal", ["emails_trouves"],  "nom",                    None,    5),
     ("notaires",       "notaires/annuaire_notaires_france.csv",         "email",           ["emails_all"],      "office",                 "city",  4),
+    ("organismes_formation", "organismes_formation/organismes_formation.csv", "email_principal", ["emails_trouves"], "denomination", "ville", 3),
     ("auto_ecole",     "auto_ecole/annuaire_auto_ecoles_france.csv",    "email",           [],                  "nom",                    "ville", 2),
     ("france_travail", "france_travail/francetravail_base.csv",         "email_principal", ["emails_trouves"],  "organisme",              "ville", 1),
 ]
