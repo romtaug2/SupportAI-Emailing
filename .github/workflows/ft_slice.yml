@@ -16,8 +16,11 @@
 name: "🔪 SupportAI Slice France Travail"
 
 on:
-  schedule:
-    - cron: "0 3 * * 1-6"   # Lun-Sam 03:00 UTC
+  # Cron DÉSACTIVÉ le 2026-10-07 : 0 à 1 fiche nouvelle par run depuis
+  # juillet (195 au total). Les minutes Actions vont aux organismes de
+  # formation (of_slice.yml). Lancement manuel toujours possible.
+  # schedule:
+  #   - cron: "0 3 * * 1-6"   # Lun-Sam 03:00 UTC
   workflow_dispatch:
     inputs:
       ft_max_pages:
