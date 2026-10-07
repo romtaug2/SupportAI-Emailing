@@ -1,0 +1,96 @@
+# ═══════════════════════════════════════════════════════════════
+#  SupportAI — Tranche quotidienne ORGANISMES DE FORMATION
+#  Source : liste publique des OF (data.gouv, Qualiopi, ≥ 30 stagiaires)
+#  puis recherche du site + email de chaque organisme.
+#   - scrape_slice_of.py : 150 organismes max / run, budget 25 min
+#   - un organisme traité (avec ou sans email) n'est jamais retraité
+#   - commit : data/organismes_formation.db + exports/organismes_formation/
+#  Les emails trouvés sont intégrés au master par build_master.py au
+#  run suivant du pipeline quotidien (05:50 UTC), qui lit exports/.
+#
+#  Lancé à 04:05 UTC : après la tranche France Travail (03:00, 45 min
+#  max) et avant le pipeline emails (05:50) → aucun conflit de push.
+#  Run ROUGE (code 2) si la recherche web est bloquée depuis GitHub.
+# ═══════════════════════════════════════════════════════════════
+
+name: "🎓 SupportAI Slice Organismes de formation"
+
+on:
+  schedule:
+    - cron: "5 4 * * 1-6"   # Lun-Sam 04:05 UTC
+  workflow_dispatch:
+    inputs:
+      of_max_per_run:
+        description: "Organismes à traiter (défaut 150)"
+        required: false
+        default: "150"
+      of_time_budget:
+        description: "Budget temps en secondes (défaut 1500 = 25 min)"
+        required: false
+        default: "1500"
+      of_min_stagiaires:
+        description: "Seuil de stagiaires/an (défaut 30)"
+        required: false
+        default: "30"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: supportai-of-slice
+  cancel-in-progress: false
+
+jobs:
+  of_slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Dépendances (léger, pas de Playwright)
+        run: pip install -q requests beautifulsoup4 lxml openpyxl curl_cffi
+
+      - name: Récolte — tranche organismes de formation
+        timeout-minutes: 30
+        env:
+          OF_MAX_PER_RUN: ${{ github.event.inputs.of_max_per_run || '150' }}
+          OF_TIME_BUDGET: ${{ github.event.inputs.of_time_budget || '1500' }}
+          OF_MIN_STAGIAIRES: ${{ github.event.inputs.of_min_stagiaires || '30' }}
+        run: python scrape_slice_of.py
+
+      - name: Committer base + exports
+        if: always()   # sauve ce qui a été traité même si le run est coupé
+        run: |
+          git config user.name  "SupportAI Bot"
+          git config user.email "bot@supportai.fr"
+
+          for p in data/organismes_formation.db exports/organismes_formation; do
+            if [ -e "$p" ]; then
+              git add -A -- "$p"
+            else
+              echo "ℹ️ absent, ignoré : $p"
+            fi
+          done
+
+          if git diff --cached --quiet; then
+            echo "ℹ️ Rien à committer"
+            exit 0
+          fi
+
+          git commit -m "🎓 Slice organismes de formation $(date -u +%Y-%m-%d)"
+
+          for i in 1 2 3; do
+            git push origin main && exit 0
+            echo "⚠️ Push rejeté, rebase..."
+            git pull --rebase --autostash origin main || exit 1
+            sleep $((RANDOM % 10 + 3))
+          done
+          exit 1
