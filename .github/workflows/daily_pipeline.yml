@@ -6,7 +6,8 @@
 #   2. build_master.py  : merge exports → master (tracking préservé)
 #   3. send_supportai.py: MASS 300 emails (pauses 2-6s ≈ 20 min)
 #   4. commit : DB + exports + curseur + master
-#   5. alerte : run ROUGE si récolte KO ou stock réel < 900 contacts
+#   5. alerte : run ROUGE si récolte KO ou moins de MIN_SENT mails
+#      envoyés aujourd'hui (machine à court de contacts)
 #  Budget Actions ≈ 35 min × 26 j ≈ 910 min/mois.
 #  Secret requis : SMTP_PASSWORD
 #  ⚠️ Hiver (CET) : décaler le cron de +1h si besoin.
@@ -41,10 +42,10 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
-      min_stock:
-        description: "Seuil d'alerte stock réel (défaut 900 = 3 jours)"
+      min_sent:
+        description: "Alerte si moins de N mails envoyés aujourd'hui (défaut 150)"
         required: false
-        default: "900"
+        default: "150"
 
 permissions:
   contents: write
@@ -163,15 +164,18 @@ jobs:
       # Toujours en DERNIER : un échec ici ne doit rien empêcher d'autre.
       # Le run passe en ROUGE (→ mail GitHub) si :
       #   - la récolte notaires a échoué, ou
-      #   - le stock réel (pending non suppressés, non risqués) < MIN_STOCK.
-      - name: Alerte — récolte KO ou stock réel trop bas
+      #   - moins de MIN_SENT mails envoyés aujourd'hui. (L'ancien seuil
+      #     "stock < 900" sonnait TOUS les jours depuis que la récolte
+      #     alimente l'envoi au jour le jour : alerte ignorée = inutile.)
+      - name: Alerte — récolte KO ou envoi du jour trop faible
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         env:
           RECOLTE_OUTCOME: ${{ steps.recolte_notaires.outcome }}
-          MIN_STOCK: ${{ github.event.inputs.min_stock || '900' }}
+          MIN_SENT: ${{ github.event.inputs.min_sent || '150' }}
         run: |
           python - <<'PY'
           import csv, os, re, sys
+          from datetime import datetime, timezone
 
           sup = list(csv.DictReader(open("emailing/data/suppression.csv", encoding="utf-8-sig")))
           sup_emails  = {(r.get("email")  or "").strip().lower() for r in sup} - {""}
@@ -193,28 +197,33 @@ jobs:
                   return False
               return not (RISKY_LOCAL_RE.match(local) or dom in RISKY_DOMAINS)
 
-          rows = csv.DictReader(open("emailing/data/supportai_contacts_master.csv", encoding="utf-8-sig"))
+          rows = list(csv.DictReader(open("emailing/data/supportai_contacts_master.csv", encoding="utf-8-sig")))
           stock = sum(1 for r in rows
                       if (r.get("send_status") or "").strip().lower() == "pending"
                       and ok((r.get("email") or "").strip().lower()))
+          today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+          sent_today = sum(1 for r in rows
+                           if (r.get("send_status") or "").strip().lower() == "sent"
+                           and (r.get("sent_at") or "").startswith(today))
 
-          min_stock = int(os.environ.get("MIN_STOCK") or 900)
+          min_sent = int(os.environ.get("MIN_SENT") or 150)
           recolte = os.environ.get("RECOLTE_OUTCOME", "")
-          jours = stock / 300
 
-          print(f"Stock réel envoyable : {stock} contacts (≈ {jours:.1f} jours à 300/jour)")
+          print(f"Envoyés aujourd'hui  : {sent_today}")
+          print(f"Stock restant        : {stock} contacts")
           print(f"Récolte notaires     : {recolte or 'n/a'}")
 
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
-              fh.write("\n## Stock d'envoi\n")
-              fh.write(f"- Stock réel envoyable : **{stock}** contacts (≈ {jours:.1f} jours)\n")
-              fh.write(f"- Seuil d'alerte : {min_stock}\n")
+              fh.write("\n## Envoi du jour\n")
+              fh.write(f"- Envoyés aujourd'hui : **{sent_today}** (seuil d'alerte {min_sent})\n")
+              fh.write(f"- Stock restant pour demain : {stock} contacts\n")
 
           problemes = []
           if recolte == "failure":
               problemes.append("récolte notaires en ÉCHEC (voir étape 1/3)")
-          if stock < min_stock:
-              problemes.append(f"stock réel {stock} < {min_stock} → ajoute une source ou active la relance")
+          if sent_today < min_sent:
+              problemes.append(f"seulement {sent_today} mails envoyés (< {min_sent}) : "
+                               "sources à sec ou recherche web bloquée (voir run 🎓 du matin)")
 
           if problemes:
               for p in problemes:
