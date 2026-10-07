@@ -2,7 +2,9 @@
 #  SupportAI — Tranche quotidienne ORGANISMES DE FORMATION
 #  Source : liste publique des OF (data.gouv, Qualiopi, ≥ 30 stagiaires)
 #  puis recherche du site + email de chaque organisme.
-#   - scrape_slice_of.py : 150 organismes max / run, budget 25 min
+#   - scrape_slice_of.py : s'arrête dès 300 EMAILS trouvés (objectif du
+#     jour), ou au bout de 30 min, ou si la recherche web est bloquée
+#   - visites de sites en parallèle (4) : ~1 organisme toutes les 3-4 s
 #   - un organisme traité (avec ou sans email) n'est jamais retraité
 #   - commit : data/organismes_formation.db + exports/organismes_formation/
 #  Les emails trouvés sont intégrés au master par build_master.py au
@@ -20,14 +22,18 @@ on:
     - cron: "5 4 * * 1-6"   # Lun-Sam 04:05 UTC
   workflow_dispatch:
     inputs:
-      of_max_per_run:
-        description: "Organismes à traiter (défaut 150)"
+      of_target_emails:
+        description: "Objectif d'emails trouvés (défaut 300)"
         required: false
-        default: "150"
-      of_time_budget:
-        description: "Budget temps en secondes (défaut 1500 = 25 min)"
+        default: "300"
+      of_max_per_run:
+        description: "Organismes à traiter au maximum (défaut 1500)"
         required: false
         default: "1500"
+      of_time_budget:
+        description: "Budget temps en secondes (défaut 1800 = 30 min)"
+        required: false
+        default: "1800"
       of_min_stagiaires:
         description: "Seuil de stagiaires/an (défaut 30)"
         required: false
@@ -43,7 +49,7 @@ concurrency:
 jobs:
   of_slice:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -59,10 +65,11 @@ jobs:
         run: pip install -q requests beautifulsoup4 lxml openpyxl curl_cffi
 
       - name: Récolte — tranche organismes de formation
-        timeout-minutes: 30
+        timeout-minutes: 38
         env:
-          OF_MAX_PER_RUN: ${{ github.event.inputs.of_max_per_run || '150' }}
-          OF_TIME_BUDGET: ${{ github.event.inputs.of_time_budget || '1500' }}
+          OF_TARGET_EMAILS: ${{ github.event.inputs.of_target_emails || '300' }}
+          OF_MAX_PER_RUN: ${{ github.event.inputs.of_max_per_run || '1500' }}
+          OF_TIME_BUDGET: ${{ github.event.inputs.of_time_budget || '1800' }}
           OF_MIN_STAGIAIRES: ${{ github.event.inputs.of_min_stagiaires || '30' }}
         run: python scrape_slice_of.py
 
