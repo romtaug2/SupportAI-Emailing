@@ -23,13 +23,14 @@ Clé naturelle : `url` (URL de la fiche office sur notaires.fr).
 
 from __future__ import annotations
 
+import os
 import random
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import parse_qsl, urldefrag, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -71,7 +72,7 @@ START_URLS_FULL = [
     "https://www.notaires.fr/fr/annuaire/nouvelle-aquitaine",
     "https://www.notaires.fr/fr/annuaire/occitanie",
     "https://www.notaires.fr/fr/annuaire/pays-de-la-loire",
-    "https://www.notaires.fr/fr/annuaire/provence-alpes-cote-d-azur",
+    "https://www.notaires.fr/fr/annuaire/provence-alpes-cote-dazur",   # slug réel (sans tiret)
     "https://www.notaires.fr/fr/annuaire/guadeloupe",
     "https://www.notaires.fr/fr/annuaire/martinique",
     "https://www.notaires.fr/fr/annuaire/guyane",
@@ -95,6 +96,11 @@ SLEEP_OFFICE_MIN = 0.4
 SLEEP_OFFICE_MAX = 1.0
 
 TIMEOUT = 30
+
+# Budget temps global (crawl + fiches) en secondes. Le step GitHub est tué à
+# 18 min SANS laisser le temps d'exporter : on s'arrête proprement avant.
+# 0 = illimité (usage local). Surchargé par l'env NOTAIRES_TIME_BUDGET.
+DEFAULT_TIME_BUDGET = int(os.getenv("NOTAIRES_TIME_BUDGET") or 0)
 
 HEADERS = {
     "User-Agent": (
@@ -132,10 +138,22 @@ def _normalize_url(url: str) -> str | None:
     if parsed.netloc and parsed.netloc not in {"www.notaires.fr", "notaires.fr"}:
         return None
 
-    full = urljoin(BASE_URL, parsed.path)
+    full = urljoin(BASE_URL, parsed.path).rstrip("/")
     if parsed.query:
-        full += "?" + parsed.query
-    return full.rstrip("/")
+        # Dédoublonne les paramètres (dernier gagnant) : évite les URLs du type
+        # ?page=8&page=11 qui faisaient exploser la file du crawl.
+        params = dict(parse_qsl(parsed.query, keep_blank_values=False))
+        if params:
+            full += "?" + urlencode(sorted(params.items()))
+    return full
+
+
+def _set_page(url: str, page: str) -> str | None:
+    """Remplace (et non ajoute) le paramètre page d'une URL d'annuaire."""
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query))
+    params["page"] = page
+    return _normalize_url(parsed._replace(query=urlencode(params)).geturl())
 
 
 def _is_annuaire_url(url: str) -> bool:
@@ -248,6 +266,11 @@ class NotairesScraper(ScraperBase):
             self._session.mount("https://", adapter)
         self._session.headers.update(HEADERS)
 
+        self.time_budget = DEFAULT_TIME_BUDGET   # secondes, 0 = illimité
+        self._deadline: float | None = None
+        self.exhausted = False   # True = périmètre entièrement couvert ce run
+        self.stop_reason = ""
+
         self._impersonate_idx = 0
         self._consecutive_403 = 0
         self._warmed_up = False
@@ -358,8 +381,9 @@ class NotairesScraper(ScraperBase):
                 urls.add(u)
 
         for m in re.findall(r"[?&]page=(\d+)", html_text):
-            sep = "&" if "?" in url else "?"
-            urls.add(f"{url}{sep}page={m}")
+            u = _set_page(url, m)
+            if u:
+                urls.add(u)
 
         return urls
 
@@ -377,6 +401,18 @@ class NotairesScraper(ScraperBase):
         done = 0
         max_pages = self.max_pages if self.max_pages is not None else 1_000_000
 
+        # Périmètre : on ne suit QUE les pages d'annuaire sous les régions de
+        # départ (avant : les liens de navigation emmenaient le crawl dans
+        # toute la France au lieu de la région du jour).
+        scope = tuple(urlparse(u).path.rstrip("/") for u in self.start_urls)
+
+        # Arrêt anticipé : dès qu'on a assez d'offices NOUVEAUX pour la
+        # tranche, inutile de crawler le reste de l'annuaire.
+        skip = getattr(self, "skip_urls", None) or set()
+        new_target = self.max_offices
+        new_found = 0
+        stopped_early = False
+
         self.log.info("=" * 60)
         self.log.info("ÉTAPE 1 : CRAWL ANNUAIRE")
         self.log.info("Start URLs    : %d", len(self.start_urls))
@@ -385,6 +421,15 @@ class NotairesScraper(ScraperBase):
         self.log.info("=" * 60)
 
         while queue and done < max_pages:
+            if new_target is not None and new_found >= new_target:
+                stopped_early = True
+                self.stop_reason = f"tranche atteinte ({new_found} nouveaux)"
+                break
+            if self._time_left() <= 0:
+                stopped_early = True
+                self.stop_reason = "budget temps épuisé pendant le crawl"
+                break
+
             url = queue.pop(0)
             if url in seen:
                 continue
@@ -406,8 +451,11 @@ class NotairesScraper(ScraperBase):
                         office_urls.add(link)
                         if len(office_urls) > before:
                             new_offices += 1
+                            if link not in skip:
+                                new_found += 1
                     elif (
                         _is_annuaire_url(link)
+                        and urlparse(link).path.rstrip("/").startswith(scope)
                         and link not in seen
                         and link not in queue
                     ):
@@ -415,12 +463,13 @@ class NotairesScraper(ScraperBase):
                         new_annuaire += 1
 
                 self.log.info(
-                    "[CRAWL] pages=%d/%s | queue=%d | offices=%d "
+                    "[CRAWL] pages=%d/%s | queue=%d | offices=%d (nouveaux=%d) "
                     "| +annuaire=%d | +offices=%d | url=%s",
                     done,
                     str(self.max_pages) if self.max_pages else "∞",
                     len(queue),
                     len(office_urls),
+                    new_found,
                     new_annuaire,
                     new_offices,
                     url,
@@ -431,8 +480,19 @@ class NotairesScraper(ScraperBase):
             except Exception as e:
                 self.log.warning("[ERREUR CRAWL] %s -> %r", url, e)
 
-        self.log.info("[CRAWL FINI] offices trouvés=%d", len(office_urls))
+        self._crawl_complete = not stopped_early and not queue
+        self.log.info(
+            "[CRAWL FINI] pages=%d | offices trouvés=%d | nouveaux=%d | %s",
+            done, len(office_urls), new_found,
+            self.stop_reason or ("périmètre entièrement crawlé" if self._crawl_complete
+                                 else "plafond de pages atteint"),
+        )
         return sorted(office_urls)
+
+    def _time_left(self) -> float:
+        if self._deadline is None:
+            return float("inf")
+        return self._deadline - time.monotonic()
 
     # ------------------------------------------------------------------
     # ÉTAPE 2 : scraping des fiches offices
@@ -486,6 +546,10 @@ class NotairesScraper(ScraperBase):
     # ------------------------------------------------------------------
 
     def iter_records(self) -> Iterator[dict]:
+        if self.time_budget:
+            self._deadline = time.monotonic() + self.time_budget
+            self.log.info("Budget temps : %ds", self.time_budget)
+        self._crawl_complete = False
         office_urls = self._crawl_annuaire()
 
         # Scraping incrémental : skip des offices déjà connus (passés via
@@ -497,7 +561,9 @@ class NotairesScraper(ScraperBase):
             office_urls = [u for u in office_urls if u not in skip]
             self.log.info("Skip déjà en base : %d -> %d nouveaux", before, len(office_urls))
 
+        remaining_after_cap = 0
         if self.max_offices is not None:
+            remaining_after_cap = max(0, len(office_urls) - self.max_offices)
             office_urls = office_urls[: self.max_offices]
 
         total = len(office_urls)
@@ -505,7 +571,13 @@ class NotairesScraper(ScraperBase):
         self.log.info("ÉTAPE 2 : SCRAPING OFFICES (%d à scraper)", total)
         self.log.info("=" * 60)
 
+        scraped_all = True
         for i, url in enumerate(office_urls, 1):
+            if self._time_left() <= 0:
+                scraped_all = False
+                self.stop_reason = f"budget temps épuisé après {i - 1}/{total} fiches"
+                self.log.warning("⏱️ %s : arrêt propre (export garanti)", self.stop_reason)
+                break
             try:
                 row = self._scrape_office(url)
             except Exception as e:
@@ -522,6 +594,10 @@ class NotairesScraper(ScraperBase):
             yield row
 
             time.sleep(random.uniform(SLEEP_OFFICE_MIN, SLEEP_OFFICE_MAX))
+
+        # Région épuisée = crawl allé au bout ET toutes les nouvelles fiches
+        # traitées. Sert à scrape_slice.py pour avancer (ou non) le curseur.
+        self.exhausted = self._crawl_complete and scraped_all and remaining_after_cap == 0
 
 
 if __name__ == "__main__":
