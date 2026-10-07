@@ -31,6 +31,9 @@ CURSOR_PATH = BASE_DIR / "data" / "scrape_cursor.json"
 DB_PATH = BASE_DIR / "data" / "notaires.db"
 
 SLICE_SIZE = int(os.getenv("SLICE_SIZE") or 300)
+# Budget temps de la récolte (s). Le step GitHub coupe à 18 min sans export :
+# on s'arrête à 15 min pour laisser le temps d'écrire la base et les exports.
+TIME_BUDGET = int(os.getenv("NOTAIRES_TIME_BUDGET") or 900)
 
 
 def _load_cursor() -> dict:
@@ -71,12 +74,13 @@ def main() -> int:
     print(f"\n🔪 Scrape slice notaires — {datetime.now(timezone.utc).isoformat()}")
     print(f"   Région  : [{idx + 1}/{len(START_URLS_FULL)}] {region_name}")
     print(f"   En base : {len(known)} offices connus (skip auto)")
-    print(f"   Tranche : {SLICE_SIZE} offices max\n")
+    print(f"   Tranche : {SLICE_SIZE} offices max | budget {TIME_BUDGET}s\n")
 
     scraper = NotairesScraper(test_mode=False)
     scraper.start_urls = [region_url]      # 1 région par run (listing borné)
     scraper.max_offices = SLICE_SIZE       # cap temps d'exécution
     scraper.skip_urls = known              # ne fetch que du nouveau
+    scraper.time_budget = TIME_BUDGET      # arrêt propre avant le kill GitHub
 
     try:
         result = scraper.run(mode="create")  # additif pur : pas de stale
@@ -87,8 +91,12 @@ def main() -> int:
 
     print(f"\n📊 Slice : +{result.inserted} nouveaux / ~{result.updated} maj")
 
-    # Moins de nouveaux que la tranche = région épuisée → région suivante.
-    if result.inserted < SLICE_SIZE:
+    if scraper.stop_reason:
+        print(f"ℹ️  Arrêt : {scraper.stop_reason}")
+
+    # On n'avance le curseur QUE si la région a été couverte en entier.
+    # (Avant : "moins de 300 insérés" = épuisée, faux dès qu'un run est coupé.)
+    if scraper.exhausted:
         next_idx = (idx + 1) % len(START_URLS_FULL)
         cursor["notaires_region_idx"] = next_idx
         print(f"➡️  Région '{region_name}' épuisée → curseur sur "
