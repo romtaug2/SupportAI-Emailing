@@ -194,6 +194,11 @@ DEFAULT_VERTICAL_COPY = {
     "hook": "1 client sur 4 va voir ailleurs",
 }
 
+# Organismes de formation issus de la liste publique data.gouv : même cible
+# que France Travail (CPF, sessions, prérequis) → même libellé et même copy.
+VERTICAL_LABELS["organismes_formation"] = VERTICAL_LABELS["france_travail"]
+VERTICAL_COPY["organismes_formation"] = VERTICAL_COPY["france_travail"]
+
 # Identité légale - SIRET hardcodé (donnée publique : annuaire-entreprises.data.gouv.fr)
 SIRET = "88281366000025"
 SIRET_URL = f"https://annuaire-entreprises.data.gouv.fr/etablissement/{SIRET}"
