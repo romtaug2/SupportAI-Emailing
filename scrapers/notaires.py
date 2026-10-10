@@ -139,6 +139,11 @@ def _normalize_url(url: str) -> str | None:
         return None
 
     full = urljoin(BASE_URL, parsed.path).rstrip("/")
+    # Fiche office : le ?search_params=<page d'origine> ne change pas le
+    # contenu. Le garder faisait compter la même office 2 fois (1 par page
+    # d'annuaire où elle apparaît) → ~40 % de la tranche gaspillée en doublons.
+    if parsed.path.startswith("/fr/office/"):
+        return full
     if parsed.query:
         # Dédoublonne les paramètres (dernier gagnant) : évite les URLs du type
         # ?page=8&page=11 qui faisaient exploser la file du crawl.
