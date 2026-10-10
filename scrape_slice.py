@@ -57,7 +57,10 @@ def _known_urls() -> set[str]:
         return set()
     try:
         con = sqlite3.connect(DB_PATH)
-        urls = {r[0] for r in con.execute("SELECT url FROM notaires") if r[0]}
+        # Canonicalise (sans query) : les anciennes lignes stockées avec
+        # ?search_params=... ne doivent plus être re-scrapées.
+        urls = {r[0].split("?", 1)[0].rstrip("/")
+                for r in con.execute("SELECT url FROM notaires") if r[0]}
         con.close()
         return urls
     except sqlite3.Error:
