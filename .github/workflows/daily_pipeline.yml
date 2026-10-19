@@ -1,13 +1,14 @@
 # ═══════════════════════════════════════════════════════════════
-#  SupportAI — Pipeline Quotidien : RÉCOLTE + ENVOI 300/jour
+#  SupportAI : Pipeline Quotidien : RÉCOLTE + ENVOI 150/jour
 #  Lun-Sam (6j/sem), 1 seul run, temps borné (job 50 min, récolte 18 max) :
 #   1. scrape_slice.py  : tranche notaires (300 offices ≈ 10 min,
 #      skip auto du déjà-vu, curseur région, mode create = 0 stale)
 #   2. build_master.py  : merge exports → master (tracking préservé)
-#   3. send_supportai.py: MASS 300 emails (pauses 2-6s ≈ 20 min)
+#   3. send_supportai.py: MASS 150 emails (pauses 2-6s ≈ 10 min)
 #   4. commit : DB + exports + curseur + master
-#   5. alerte : run ROUGE si récolte KO ou moins de MIN_SENT mails
-#      envoyés aujourd'hui (machine à court de contacts)
+#   5. alerte : ROUGE si quelque chose est CASSÉ (récolte KO, envoi
+#      arrêté alors qu'il restait des contacts, machine totalement à sec)
+#      ORANGE (avertissement, run vert) si la réserve est juste maigre
 #  Budget Actions ≈ 35 min × 26 j ≈ 910 min/mois.
 #  Secret requis : SMTP_PASSWORD
 #  ⚠️ Hiver (CET) : décaler le cron de +1h si besoin.
@@ -19,6 +20,15 @@
 #     (data/scrape_cursor.json n'a jamais existé) → rien n'était commité.
 #     On ajoute maintenant chemin par chemin, seulement s'il existe.
 #   - étape finale d'alerte : échec volontaire → mail GitHub.
+#
+#  CORRECTIFS 2026-10-19 :
+#   - Volume 300 → 150/jour : la récolte produit ~150 contacts/jour en
+#     moyenne. À 300, la réserve se vidait un jour sur deux (run rouge).
+#   - Alerte : l'ancien seuil "< 150 envoyés" sonnait dès que la récolte
+#     du jour était maigre, sans rien de cassé. Désormais rouge seulement
+#     si un vrai problème existe ; une réserve faible = avertissement.
+#   - build_master.py réconcilie le master avec suppression.csv : 10 821
+#     contacts déjà envoyés étaient affichés "pending" (faux stock).
 # ═══════════════════════════════════════════════════════════════
 
 name: "🔁 SupportAI Pipeline Quotidien"
@@ -29,9 +39,9 @@ on:
   workflow_dispatch:
     inputs:
       daily_limit:
-        description: "Emails à envoyer (défaut 300)"
+        description: "Emails à envoyer (défaut 150)"
         required: false
-        default: "300"
+        default: "150"
       slice_size:
         description: "Offices notaires à scraper (défaut 300, 0 = skip)"
         required: false
@@ -42,10 +52,6 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
-      min_sent:
-        description: "Alerte si moins de N mails envoyés aujourd'hui (défaut 150)"
-        required: false
-        default: "150"
 
 permissions:
   contents: write
@@ -121,7 +127,7 @@ jobs:
       - name: 3/3 Envoi — MASS
         env:
           SEND_MODE: "MASS"
-          DAILY_LIMIT: ${{ github.event.inputs.daily_limit || '300' }}
+          DAILY_LIMIT: ${{ github.event.inputs.daily_limit || '150' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: python emailing/send_supportai.py
@@ -162,16 +168,18 @@ jobs:
           exit 1
 
       # Toujours en DERNIER : un échec ici ne doit rien empêcher d'autre.
-      # Le run passe en ROUGE (→ mail GitHub) si :
-      #   - la récolte notaires a échoué, ou
-      #   - moins de MIN_SENT mails envoyés aujourd'hui. (L'ancien seuil
-      #     "stock < 900" sonnait TOUS les jours depuis que la récolte
-      #     alimente l'envoi au jour le jour : alerte ignorée = inutile.)
-      - name: Alerte — récolte KO ou envoi du jour trop faible
+      #  ROUGE (run en échec → mail GitHub) seulement si quelque chose est CASSÉ :
+      #   - la récolte notaires a échoué ;
+      #   - l'envoi s'est arrêté alors qu'il restait des contacts (SMTP, quota,
+      #     timeout...) ;
+      #   - zéro envoi ET zéro contact en réserve : machine totalement à sec.
+      #  ORANGE (avertissement visible dans le run, pas de mail) si la réserve
+      #  ne couvre pas l'envoi de demain : à surveiller, rien de cassé.
+      - name: Alerte — panne réelle ou réserve faible
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         env:
           RECOLTE_OUTCOME: ${{ steps.recolte_notaires.outcome }}
-          MIN_SENT: ${{ github.event.inputs.min_sent || '150' }}
+          DAILY_LIMIT: ${{ github.event.inputs.daily_limit || '150' }}
         run: |
           python - <<'PY'
           import csv, os, re, sys
@@ -206,28 +214,39 @@ jobs:
                            if (r.get("send_status") or "").strip().lower() == "sent"
                            and (r.get("sent_at") or "").startswith(today))
 
-          min_sent = int(os.environ.get("MIN_SENT") or 150)
+          limit = int(os.environ.get("DAILY_LIMIT") or 150)
           recolte = os.environ.get("RECOLTE_OUTCOME", "")
+          jours = stock / limit if limit else 0
 
-          print(f"Envoyés aujourd'hui  : {sent_today}")
-          print(f"Stock restant        : {stock} contacts")
+          print(f"Envoyés aujourd'hui  : {sent_today} / {limit}")
+          print(f"Réserve restante     : {stock} contacts (≈ {jours:.1f} jour(s) d'envoi)")
           print(f"Récolte notaires     : {recolte or 'n/a'}")
 
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
-              fh.write("\n## Envoi du jour\n")
-              fh.write(f"- Envoyés aujourd'hui : **{sent_today}** (seuil d'alerte {min_sent})\n")
-              fh.write(f"- Stock restant pour demain : {stock} contacts\n")
-
-          problemes = []
+          rouge, orange = [], []
           if recolte == "failure":
-              problemes.append("récolte notaires en ÉCHEC (voir étape 1/3)")
-          if sent_today < min_sent:
-              problemes.append(f"seulement {sent_today} mails envoyés (< {min_sent}) : "
-                               "sources à sec ou recherche web bloquée (voir run 🎓 du matin)")
+              rouge.append("récolte notaires en ÉCHEC (voir étape 1/3)")
+          if sent_today < limit and stock > 0:
+              rouge.append(f"envoi arrêté à {sent_today}/{limit} alors qu'il restait {stock} contacts "
+                           "(voir étape 3/3 : SMTP, quota ou temps)")
+          if sent_today == 0 and stock == 0:
+              rouge.append("machine à sec : aucun envoi et aucun contact en réserve")
+          if not rouge and stock < limit:
+              orange.append(f"réserve faible : {stock} contacts pour demain (objectif {limit}). "
+                            "Récolte du jour maigre, rien de cassé.")
 
-          if problemes:
-              for p in problemes:
-                  print(f"🚨 {p}")
+          etat = "🔴 PANNE" if rouge else ("🟠 À surveiller" if orange else "🟢 OK")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write(f"\n## Envoi du jour : {etat}\n")
+              fh.write(f"- Envoyés aujourd'hui : **{sent_today}** / {limit}\n")
+              fh.write(f"- Réserve pour les prochains jours : **{stock}** contacts (≈ {jours:.1f} jour(s))\n")
+              for m in rouge + orange:
+                  fh.write(f"- {m}\n")
+
+          for m in orange:
+              print(f"::warning title=Réserve faible::{m}")
+          if rouge:
+              for m in rouge:
+                  print(f"🚨 {m}")
               sys.exit(1)
-          print("✅ OK")
+          print("✅ OK" if not orange else "🟠 OK, réserve à surveiller")
           PY
