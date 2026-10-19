@@ -25,6 +25,7 @@ REPO_DIR = BASE_DIR.parent                          # racine repo
 EXPORTS_DIR = REPO_DIR / "exports"
 DATA_DIR = BASE_DIR / "data"
 MASTER_PATH = DATA_DIR / "supportai_contacts_master.csv"
+SUPPRESSION_PATH = DATA_DIR / "suppression.csv"
 
 # ── Mapping des bases ────────────────────────────────────────────────
 #  (vertical, fichier, col_email, cols_emails_secondaires, col_company, col_city, rank)
@@ -132,6 +133,58 @@ def load_existing_master() -> dict[str, dict]:
     return out
 
 
+def load_suppression_index() -> tuple[dict[str, dict], set[str]]:
+    """Registre anti-doublon -> ({email: ligne}, {domaines bloqués})."""
+    emails: dict[str, dict] = {}
+    domains: set[str] = set()
+    if not SUPPRESSION_PATH.exists():
+        return emails, domains
+    with SUPPRESSION_PATH.open("r", newline="", encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            e = _clean(row.get("email")).lower()
+            d = _clean(row.get("domain")).lower()
+            if e:
+                emails.setdefault(e, row)
+            elif d:
+                domains.add(d)
+    return emails, domains
+
+
+def reconcile_with_suppression(rows: list[dict]) -> tuple[int, int]:
+    """Aligne le statut du master sur le registre de suppression.
+
+    Le registre (append-only, écrit à CHAQUE envoi) est la source de vérité.
+    En juillet-septembre 2026, ~11 000 contacts ont été envoyés mais le
+    master a perdu leur statut : ils restaient "pending" alors qu'ils
+    étaient bloqués par le registre. Résultat : un faux stock de 11 000
+    contacts, et des statistiques fausses. Ici, un contact "pending"
+    présent dans le registre devient :
+      - "sent"       si le motif est "sent" (date d'envoi = date du registre)
+      - "suppressed" pour tout autre motif (plainte, adresse à risque, domaine)
+    Idempotent : ne touche jamais un contact déjà sent / error / suppressed.
+    """
+    sup_emails, sup_domains = load_suppression_index()
+    n_sent = n_supp = 0
+    for row in rows:
+        if _clean(row.get("send_status")).lower() != "pending":
+            continue
+        email = _clean(row.get("email")).lower()
+        domain = email.split("@", 1)[1] if "@" in email else ""
+        hit = sup_emails.get(email)
+        if hit and _clean(hit.get("reason")).lower() == "sent":
+            row["send_status"] = "sent"
+            row["email_sent"] = "true"
+            row["sent_at"] = row.get("sent_at") or _clean(hit.get("added_at"))
+            row["last_error"] = "statut reconstitué depuis suppression.csv"
+            n_sent += 1
+        elif hit or domain in sup_domains:
+            row["send_status"] = "suppressed"
+            row["last_error"] = "registre de suppression : " + (
+                _clean(hit.get("reason")) if hit else "domaine bloqué")
+            n_supp += 1
+    return n_sent, n_supp
+
+
 def main() -> int:
     print(f"\n🔧 Build master SupportAI — {_now()}")
     print(f"   Exports : {EXPORTS_DIR}")
@@ -176,6 +229,8 @@ def main() -> int:
             merged.append(row)
             n_orphans += 1
 
+    n_rec_sent, n_rec_supp = reconcile_with_suppression(merged)
+
     # Tri : rank décroissant puis email (stable, diffs git propres)
     merged.sort(key=lambda r: (-int(r.get("score_source_rank") or 0), r["email"]))
 
@@ -188,13 +243,15 @@ def main() -> int:
     n_pending = sum(1 for r in merged if r["send_status"] == "pending")
     n_sent = sum(1 for r in merged if r["send_status"] == "sent")
     n_error = sum(1 for r in merged if r["send_status"] == "error")
+    n_supp = sum(1 for r in merged if r["send_status"] == "suppressed")
 
     print(f"\n💾 Master écrit : {len(merged)} contacts "
           f"({MASTER_PATH.stat().st_size / 1024:.0f} Ko)")
     print(f"   🆕 nouveaux pending : {n_new}")
     print(f"   🔒 tracking préservé : {n_kept_tracking}")
     print(f"   👻 orphelins conservés : {n_orphans}")
-    print(f"   📊 état : {n_pending} pending / {n_sent} sent / {n_error} error")
+    print(f"   🧹 réconciliés avec le registre : {n_rec_sent} -> sent, {n_rec_supp} -> suppressed")
+    print(f"   📊 état : {n_pending} pending / {n_sent} sent / {n_supp} suppressed / {n_error} error")
     return 0
 
 
