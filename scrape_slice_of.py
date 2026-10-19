@@ -62,9 +62,28 @@ def main() -> int:
         print(f"  ⏹️  Arrêt           : {scraper.stop_reason}")
     print("=" * 66)
 
-    if s["traites"] == 0 and "bloqué" in scraper.stop_reason:
-        print("🚨 Aucun organisme traité : recherche web bloquée depuis GitHub Actions.")
+    print(f"  🔎 Moteur          : {scraper.search_engine} ({scraper.searches_done} recherches)")
+
+    # Un blocage n'est plus silencieux : avant, 1 organisme traité suffisait
+    # pour afficher "ok" alors que la source ne rapportait plus rien.
+    bloque = "bloqué" in (scraper.stop_reason or "")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if bloque and scraper.search_engine == "duckduckgo":
+        msg = ("Source organismes de formation EN PANNE : DuckDuckGo bloque GitHub Actions "
+               f"({s['traites']} organismes traités, {s['emails']} emails). "
+               "Ajouter le secret BRAVE_API_KEY pour la relancer.")
+        print(f"::warning title=Source organismes de formation en panne::{msg}")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as fh:
+                fh.write(f"## 🎓 Organismes de formation\n⚠️ {msg}\n")
+        return 0          # orange : à réparer, mais pas une alerte rouge quotidienne
+    if bloque:            # Brave configuré et pourtant bloqué : vrai problème
+        print("🚨 Brave Search refuse les recherches : clé invalide ou crédit épuisé.")
         return 2
+    if summary:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(f"## 🎓 Organismes de formation\n- Moteur : {scraper.search_engine}, "
+                     f"{scraper.searches_done} recherches\n- Emails trouvés : **{s['emails']}**\n")
     return 0
 
 
