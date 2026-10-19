@@ -71,6 +71,9 @@ jobs:
           OF_MAX_PER_RUN: ${{ github.event.inputs.of_max_per_run || '1500' }}
           OF_TIME_BUDGET: ${{ github.event.inputs.of_time_budget || '1800' }}
           OF_MIN_STAGIAIRES: ${{ github.event.inputs.of_min_stagiaires || '30' }}
+          # Moteur de recherche : sans ce secret, DuckDuckGo (bloqué depuis GitHub).
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          BRAVE_DAILY_CAP: ${{ vars.BRAVE_DAILY_CAP || '38' }}
         run: python scrape_slice_of.py
 
       - name: Committer base + exports
