@@ -81,6 +81,19 @@ QUALIOPI_ONLY = (os.getenv("OF_QUALIOPI_ONLY") or "true").strip().lower() in {
 }
 
 SEARCH_URL = "https://html.duckduckgo.com/html/"
+
+# ── Moteur de recherche ──────────────────────────────────────────────
+# DuckDuckGo bloque les serveurs GitHub Actions après 2-3 recherches :
+# la source ne ramenait plus que 0 à 2 emails par jour (octobre 2026).
+# Si BRAVE_API_KEY est défini, on passe par l'API Brave Search, qui ne
+# bloque pas. Tarif (oct. 2026) : 5 $ de crédit offert par mois, soit
+# environ 1 000 recherches, puis 5 $ les 1 000. BRAVE_DAILY_CAP plafonne
+# les recherches par run : 38 x 26 runs/mois ≈ 990, soit le crédit offert.
+# Pour aller plus vite, monter BRAVE_DAILY_CAP (300 ≈ 40 $/mois).
+BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
+BRAVE_API_KEY = (os.getenv("BRAVE_API_KEY") or "").strip()
+BRAVE_DAILY_CAP = max(0, int(os.getenv("BRAVE_DAILY_CAP") or 38))
+BRAVE_SLEEP_MIN = 1.1                 # l'API tolère bien plus : on reste sobre
 SEARCH_SLEEP_MIN = 2.0
 SEARCH_SLEEP_MAX = 4.5
 SITE_SLEEP_MIN = 0.3
@@ -302,6 +315,8 @@ class OrganismesFormationScraper(ScraperBase):
         # HTTP ne sont pas thread-safe).
         self._tls = threading.local()
         self._search_fail_streak = 0
+        self.search_engine = "brave" if BRAVE_API_KEY else "duckduckgo"
+        self.searches_done = 0
 
     # ------------------------------------------------------------------
     # HTTP
@@ -447,6 +462,38 @@ class OrganismesFormationScraper(ScraperBase):
 
     def _search(self, query: str) -> list[str] | None:
         """URLs de résultats, [] si aucun, None si le moteur bloque."""
+        self.searches_done += 1
+        if self.search_engine == "brave":
+            return self._search_brave(query)
+        return self._search_ddg(query)
+
+    def _search_brave(self, query: str) -> list[str] | None:
+        try:
+            import requests as _rq   # requête JSON simple : pas besoin de curl_cffi
+            r = _rq.get(BRAVE_URL,
+                        params={"q": query, "country": "FR", "search_lang": "fr", "count": 10},
+                        headers={"Accept": "application/json",
+                                 "X-Subscription-Token": BRAVE_API_KEY},
+                        timeout=20)
+        except Exception as e:
+            self.log.warning("Brave KO (%r)", e)
+            return None
+        if r.status_code in (401, 403):
+            self.log.error("Brave : clé refusée (HTTP %s) : vérifier le secret BRAVE_API_KEY", r.status_code)
+            return None
+        if r.status_code == 429:
+            self.log.warning("Brave : limite atteinte (HTTP 429, quota ou crédit épuisé)")
+            return None
+        if r.status_code != 200:
+            self.log.warning("Brave HTTP %s", r.status_code)
+            return None
+        try:
+            results = (r.json().get("web") or {}).get("results") or []
+        except ValueError:
+            return None
+        return [x.get("url", "") for x in results if str(x.get("url", "")).startswith("http")]
+
+    def _search_ddg(self, query: str) -> list[str] | None:
         try:
             if HAS_CFFI:
                 r = self._session.post(SEARCH_URL, data={"q": query, "kl": "fr-fr"},
@@ -639,6 +686,10 @@ class OrganismesFormationScraper(ScraperBase):
                 if self._time_left() <= 0:
                     self.stop_reason = f"budget temps épuisé après {i - 1}/{total}"
                     break
+                if self.search_engine == "brave" and BRAVE_DAILY_CAP and self.searches_done >= BRAVE_DAILY_CAP:
+                    self.stop_reason = (f"plafond Brave du jour atteint ({BRAVE_DAILY_CAP} recherches, "
+                                        f"BRAVE_DAILY_CAP)")
+                    break
 
                 sites = self._candidate_sites(of)
                 if sites is None:             # pas enregistré → retenté plus tard
@@ -656,7 +707,10 @@ class OrganismesFormationScraper(ScraperBase):
                     wait(futures, return_when=FIRST_COMPLETED)
                     yield from self._collect(futures, block=False)
 
-                time.sleep(random.uniform(SEARCH_SLEEP_MIN, SEARCH_SLEEP_MAX))
+                if self.search_engine == "brave":
+                    time.sleep(BRAVE_SLEEP_MIN)
+                else:
+                    time.sleep(random.uniform(SEARCH_SLEEP_MIN, SEARCH_SLEEP_MAX))
 
             # Visites encore en cours : on les termine (≤ ~1 min) pour ne
             # perdre aucun organisme déjà cherché.
