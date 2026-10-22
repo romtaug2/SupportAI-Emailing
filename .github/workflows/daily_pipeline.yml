@@ -29,6 +29,15 @@
 #     si un vrai problème existe ; une réserve faible = avertissement.
 #   - build_master.py réconcilie le master avec suppression.csv : 10 821
 #     contacts déjà envoyés étaient affichés "pending" (faux stock).
+#
+#  CORRECTIFS 2026-10-22 :
+#   - Récolte bloquée 3 jours (20-22 oct.) : 0 notaire inséré, run "vert".
+#     Chaque run recrawlait la région depuis la page 1 et épuisait ses
+#     15 min sur des pages déjà vues. L'état du crawl est maintenant sauvé
+#     (data/notaires_crawl_state.json, commité) et repris au run suivant.
+#   - Garde-fou : 3 runs d'affilée à 0 nouveau → région suivante forcée.
+#   - Alerte : ROUGE dès 2 récoltes d'affilée à 0 nouveau (avant : rien
+#     tant que la réserve n'était pas vide, donc 3 jours de retard).
 # ═══════════════════════════════════════════════════════════════
 
 name: "🔁 SupportAI Pipeline Quotidien"
@@ -141,6 +150,7 @@ jobs:
           # Chemin par chemin : un seul chemin manquant faisait tout annuler.
           for p in data/notaires.db \
                    data/scrape_cursor.json \
+                   data/notaires_crawl_state.json \
                    exports/notaires \
                    emailing/data/supportai_contacts_master.csv \
                    emailing/data/suppression.csv \
@@ -179,6 +189,9 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         env:
           RECOLTE_OUTCOME: ${{ steps.recolte_notaires.outcome }}
+          RECOLTE_INSERTED: ${{ steps.recolte_notaires.outputs.inserted }}
+          RECOLTE_ZERO_RUNS: ${{ steps.recolte_notaires.outputs.zero_runs }}
+          RECOLTE_REGION: ${{ steps.recolte_notaires.outputs.region }}
           DAILY_LIMIT: ${{ github.event.inputs.daily_limit || '150' }}
         run: |
           python - <<'PY'
@@ -220,7 +233,11 @@ jobs:
 
           print(f"Envoyés aujourd'hui  : {sent_today} / {limit}")
           print(f"Réserve restante     : {stock} contacts (≈ {jours:.1f} jour(s) d'envoi)")
-          print(f"Récolte notaires     : {recolte or 'n/a'}")
+          ins = os.environ.get("RECOLTE_INSERTED", "")
+          zero_runs = int(os.environ.get("RECOLTE_ZERO_RUNS") or 0)
+          region = os.environ.get("RECOLTE_REGION", "")
+          print(f"Récolte notaires     : {recolte or 'n/a'} | +{ins or '?'} nouveaux "
+                f"| région {region or '?'} | runs à 0 d'affilée : {zero_runs}")
 
           rouge, orange = [], []
           if recolte == "failure":
@@ -228,6 +245,11 @@ jobs:
           if sent_today < limit and stock > 0:
               rouge.append(f"envoi arrêté à {sent_today}/{limit} alors qu'il restait {stock} contacts "
                            "(voir étape 3/3 : SMTP, quota ou temps)")
+          if zero_runs >= 2:
+              rouge.append(f"récolte notaires BLOQUÉE : {zero_runs} runs d'affilée à 0 nouveau "
+                           f"(région {region}). Voir les logs de l'étape 1/3.")
+          elif ins == "0" and recolte != "failure":
+              orange.append("récolte notaires à 0 nouveau aujourd'hui (1er jour, à surveiller)")
           if sent_today == 0 and stock == 0:
               rouge.append("machine à sec : aucun envoi et aucun contact en réserve")
           if not rouge and stock < limit:
