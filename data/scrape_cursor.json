@@ -1,4 +1,7 @@
 {
- "notaires_region_idx": 2,
- "updated_at": "2026-10-22T10:59:18.281537+00:00"
+ "notaires_region_idx": 3,
+ "updated_at": "2026-10-22T10:59:18.281537+00:00",
+ "zero_runs": 0,
+ "last_inserted": 0,
+ "note": "2026-10-22 : Bretagne bloquée 3 runs à 0, curseur avancé à la main sur Centre-Val de Loire"
 }
