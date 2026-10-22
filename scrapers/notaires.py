@@ -275,6 +275,8 @@ class NotairesScraper(ScraperBase):
         self._deadline: float | None = None
         self.exhausted = False   # True = périmètre entièrement couvert ce run
         self.stop_reason = ""
+        self.crawl_state: dict = {}   # reprise du crawl entre runs (scrape_slice.py)
+        self.pages_crawled = 0
 
         self._impersonate_idx = 0
         self._consecutive_403 = 0
@@ -393,15 +395,31 @@ class NotairesScraper(ScraperBase):
         return urls
 
     def _crawl_annuaire(self) -> list[str]:
-        """BFS depuis les régions -> collecte les URLs d'offices."""
-        seen: set[str] = set()
-        office_urls: set[str] = set()
-        queue: list[str] = []
+        """BFS depuis les régions -> collecte les URLs d'offices.
 
-        for u in self.start_urls:
-            n = _normalize_url(u)
-            if n and n not in seen and n not in queue:
-                queue.append(n)
+        REPRISE ENTRE RUNS (correctif 2026-10-22) : avant, chaque run
+        recrawlait la région depuis la 1re page. Une fois les ~300 premières
+        offices en base, les 15 min du budget partaient à re-parcourir des
+        pages déjà vues : 0 nouvelle office, curseur jamais avancé, région
+        bloquée pour toujours (Bretagne : 0 inséré les 20, 21 et 22 oct.).
+        Désormais l'état du crawl (file, pages vues, offices découvertes non
+        encore scrapées) est porté par self.crawl_state, que scrape_slice.py
+        sauvegarde dans data/notaires_crawl_state.json : chaque run reprend
+        exactement où le précédent s'est arrêté.
+        """
+        state = self.crawl_state
+        seen: set[str] = set(state.get("seen") or [])
+        queue: list[str] = list(state.get("queue") or [])
+        fails: dict[str, int] = dict(state.get("fails") or {})
+        skip = getattr(self, "skip_urls", None) or set()
+        # Offices découvertes lors des runs précédents mais pas encore en base
+        pending: set[str] = {u for u in (state.get("pending") or []) if u not in skip}
+
+        if not seen and not queue:
+            for u in self.start_urls:
+                n = _normalize_url(u)
+                if n and n not in queue:
+                    queue.append(n)
 
         done = 0
         max_pages = self.max_pages if self.max_pages is not None else 1_000_000
@@ -411,28 +429,31 @@ class NotairesScraper(ScraperBase):
         # toute la France au lieu de la région du jour).
         scope = tuple(urlparse(u).path.rstrip("/") for u in self.start_urls)
 
-        # Arrêt anticipé : dès qu'on a assez d'offices NOUVEAUX pour la
-        # tranche, inutile de crawler le reste de l'annuaire.
-        skip = getattr(self, "skip_urls", None) or set()
         new_target = self.max_offices
-        new_found = 0
         stopped_early = False
+        dropped = 0   # pages abandonnées ce run (3 échecs) : région pas "finie"
+        # Si on a déjà du nouveau à scraper, le crawl ne doit pas manger plus
+        # de la moitié du budget : il faut du temps pour les fiches.
+        half_budget = (self.time_budget or 0) / 2
 
         self.log.info("=" * 60)
-        self.log.info("ÉTAPE 1 : CRAWL ANNUAIRE")
-        self.log.info("Start URLs    : %d", len(self.start_urls))
-        self.log.info("Max pages     : %s",
-                      self.max_pages if self.max_pages else "illimité")
+        self.log.info("ÉTAPE 1 : CRAWL ANNUAIRE (reprise)")
+        self.log.info("Pages déjà vues : %d | file : %d | offices en attente : %d",
+                      len(seen), len(queue), len(pending))
         self.log.info("=" * 60)
 
         while queue and done < max_pages:
-            if new_target is not None and new_found >= new_target:
+            if new_target is not None and len(pending) >= new_target:
                 stopped_early = True
-                self.stop_reason = f"tranche atteinte ({new_found} nouveaux)"
+                self.stop_reason = f"tranche atteinte ({len(pending)} nouveaux)"
                 break
             if self._time_left() <= 0:
                 stopped_early = True
                 self.stop_reason = "budget temps épuisé pendant le crawl"
+                break
+            if pending and half_budget and self._time_left() <= half_budget:
+                stopped_early = True
+                self.stop_reason = f"mi-budget : place aux fiches ({len(pending)} nouveaux)"
                 break
 
             url = queue.pop(0)
@@ -452,12 +473,9 @@ class NotairesScraper(ScraperBase):
 
                 for link in links:
                     if _is_office_url(link):
-                        before = len(office_urls)
-                        office_urls.add(link)
-                        if len(office_urls) > before:
+                        if link not in skip and link not in pending:
+                            pending.add(link)
                             new_offices += 1
-                            if link not in skip:
-                                new_found += 1
                     elif (
                         _is_annuaire_url(link)
                         and urlparse(link).path.rstrip("/").startswith(scope)
@@ -468,31 +486,41 @@ class NotairesScraper(ScraperBase):
                         new_annuaire += 1
 
                 self.log.info(
-                    "[CRAWL] pages=%d/%s | queue=%d | offices=%d (nouveaux=%d) "
+                    "[CRAWL] pages=%d (total vues=%d) | queue=%d | nouveaux=%d "
                     "| +annuaire=%d | +offices=%d | url=%s",
-                    done,
-                    str(self.max_pages) if self.max_pages else "∞",
-                    len(queue),
-                    len(office_urls),
-                    new_found,
-                    new_annuaire,
-                    new_offices,
-                    url,
+                    done, len(seen), len(queue), len(pending),
+                    new_annuaire, new_offices, url,
                 )
 
                 time.sleep(random.uniform(SLEEP_CRAWL_MIN, SLEEP_CRAWL_MAX))
 
             except Exception as e:
-                self.log.warning("[ERREUR CRAWL] %s -> %r", url, e)
+                # Page en échec : remise en fin de file (3 essais max, sur
+                # plusieurs runs), au lieu d'être perdue définitivement.
+                fails[url] = fails.get(url, 0) + 1
+                if fails[url] < 3:
+                    queue.append(url)
+                else:
+                    dropped += 1
+                self.log.warning("[ERREUR CRAWL] %s (essai %d) -> %r", url, fails[url], e)
 
-        self._crawl_complete = not stopped_early and not queue
+        self.pages_crawled = done
+        # Complet = file vide, au moins une page lue, et aucune page abandonnée
+        # CE run (sinon un blocage Cloudflare total ferait sauter la région).
+        self._crawl_complete = not queue and bool(seen) and dropped == 0
+        self.crawl_state = {
+            "seen": sorted(seen),
+            "queue": queue,
+            "pending": sorted(pending),
+            "fails": fails,
+        }
         self.log.info(
-            "[CRAWL FINI] pages=%d | offices trouvés=%d | nouveaux=%d | %s",
-            done, len(office_urls), new_found,
+            "[CRAWL FINI] pages ce run=%d | vues au total=%d | file restante=%d | nouveaux=%d | %s",
+            done, len(seen), len(queue), len(pending),
             self.stop_reason or ("périmètre entièrement crawlé" if self._crawl_complete
                                  else "plafond de pages atteint"),
         )
-        return sorted(office_urls)
+        return sorted(pending)
 
     def _time_left(self) -> float:
         if self._deadline is None:
@@ -555,16 +583,9 @@ class NotairesScraper(ScraperBase):
             self._deadline = time.monotonic() + self.time_budget
             self.log.info("Budget temps : %ds", self.time_budget)
         self._crawl_complete = False
+        # _crawl_annuaire renvoie déjà uniquement des offices NOUVELLES
+        # (pas en base), y compris celles découvertes aux runs précédents.
         office_urls = self._crawl_annuaire()
-
-        # Scraping incrémental : skip des offices déjà connus (passés via
-        # l'attribut skip_urls par scrape_slice.py). Chaque run ne fetch
-        # que des fiches NOUVELLES -> la tranche avance toute seule.
-        skip = getattr(self, "skip_urls", None)
-        if skip:
-            before = len(office_urls)
-            office_urls = [u for u in office_urls if u not in skip]
-            self.log.info("Skip déjà en base : %d -> %d nouveaux", before, len(office_urls))
 
         remaining_after_cap = 0
         if self.max_offices is not None:
@@ -577,6 +598,7 @@ class NotairesScraper(ScraperBase):
         self.log.info("=" * 60)
 
         scraped_all = True
+        office_fails = dict(self.crawl_state.get("office_fails") or {})
         for i, url in enumerate(office_urls, 1):
             if self._time_left() <= 0:
                 scraped_all = False
@@ -587,6 +609,9 @@ class NotairesScraper(ScraperBase):
                 row = self._scrape_office(url)
             except Exception as e:
                 self.log.warning("[ERREUR OFFICE] %s -> %r", url, e)
+                office_fails[url] = office_fails.get(url, 0) + 1
+                if office_fails[url] >= 3:   # fiche morte : on l'abandonne
+                    self._drop_pending(url)
                 continue
 
             self.log.info(
@@ -596,13 +621,22 @@ class NotairesScraper(ScraperBase):
                 "oui" if row.get("email") else "non",
                 (row.get("office") or "")[:80],
             )
+            self._drop_pending(url)
             yield row
 
             time.sleep(random.uniform(SLEEP_OFFICE_MIN, SLEEP_OFFICE_MAX))
 
-        # Région épuisée = crawl allé au bout ET toutes les nouvelles fiches
-        # traitées. Sert à scrape_slice.py pour avancer (ou non) le curseur.
-        self.exhausted = self._crawl_complete and scraped_all and remaining_after_cap == 0
+        self.crawl_state["office_fails"] = office_fails
+        # Région épuisée = crawl allé au bout ET plus aucune office en attente.
+        # Sert à scrape_slice.py pour avancer (ou non) le curseur.
+        self.exhausted = (self._crawl_complete and scraped_all
+                          and remaining_after_cap == 0
+                          and not self.crawl_state.get("pending"))
+
+    def _drop_pending(self, url: str) -> None:
+        pend = self.crawl_state.get("pending")
+        if pend and url in pend:
+            pend.remove(url)
 
 
 if __name__ == "__main__":
