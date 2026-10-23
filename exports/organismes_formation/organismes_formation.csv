@@ -1,4 +1,5 @@
 ﻿nda,siret,denomination,code_postal,ville,region,qualiopi,nb_stagiaires,nb_formateurs,specialite,site_web,email_principal,emails_trouves,email_source,statut,date_scraping
+53351042035,83923926600043,SIMANGO,35000,RENNES,53,formation,119833,3,Santé,https://simango.fr,contact@simango.fr,handicap@simango.fr;communication@simango.fr;contact@simango.fr,site,ok,2026-10-23 09:13:07
 28610102561,83411160100011,UDD,,,28,formation;vae,128484,2756,Linguistique,https://udd.eu,,,,site_sans_email,2026-10-22 09:17:57
 31590340859,40073444800022,INNOVATION DEVELOPT FORMATION I.D. FORMATION,,,32,formation;apprentissage;bilan,129603,520,Formations générales,,,,,introuvable,2026-10-21 09:14:55
 22020084902,39017462100404,AKSIS,,,32,formation;bilan,142980,707,"Développement des capacités d'orientation, d'insertion ou de réinsertion sociales et professionnelles",https://www.aksis.fr,,,,site_sans_email,2026-10-20 09:17:58
