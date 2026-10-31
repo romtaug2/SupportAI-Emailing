@@ -450,11 +450,11 @@ Connexion Google disponible - Accédez à votre espace SupportAI en un clic, san
 
 Répondez à cet email pour démarrer : {CONTACT_EMAIL}
 
-P.-S. Si votre site a besoin d'un coup de neuf, ou si vous n'en avez pas encore :
-nous créons aussi des sites web, avec un formulaire de contact qui vous envoie
-chaque demande complète (nom, téléphone, projet, message). Nous vous présentons
-le vôtre déjà en ligne, et vous ne payez 490 € que si vous le gardez :
-{SITE_WEB_URL}
+P.-S. Pas encore de site, ou un site que personne ne trouve sur Google ?
+Nous créons aussi des sites web conçus pour être trouvés sur Google dans votre
+ville et votre métier, avec un formulaire qui vous envoie chaque demande
+complète. Prix : 490 €, payé seulement si le site vous plaît, après l'avoir vu
+en ligne : {SITE_WEB_URL}
 
 ---
 SupportAI · {COMPANY_ID_LABEL} {_format_company_id(COMPANY_ID_VALUE)} · {ADRESSE_SOCIETE}
@@ -1011,14 +1011,19 @@ def _build_html(contact: dict, has_logo: bool = False, has_thumb: bool = False) 
     </p>
   </td></tr>
 
-  <!-- P.-S. : création de sites web -->
+  <!-- P.-S. : création de sites web (référencement et prix mis en valeur) -->
   <tr><td style="padding-top:22px;">
-    <p style="font-size:13px;color:#4A5A6E;margin:0;font-family:Arial,sans-serif;line-height:1.6;">
-      <strong style="color:#0A1F3D;">P.-S.</strong> Si votre site a besoin d'un coup de neuf, ou si vous n'en avez pas encore :
-      nous créons aussi des sites web, avec un formulaire de contact qui vous envoie chaque demande complète
-      (nom, téléphone, projet, message). Nous vous présentons le vôtre déjà en ligne, et vous ne payez 490 € que si vous le gardez.
-      <a href="{SITE_WEB_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">Voir l'offre site web</a>
-    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td style="background:#F0F6FF;border-left:3px solid #1976D2;border-radius:6px;padding:14px 16px;">
+        <p style="font-size:14px;color:#4A5A6E;margin:0;font-family:Arial,sans-serif;line-height:1.6;">
+          <strong style="color:#0A1F3D;">P.-S.</strong> Pas encore de site, ou un site que personne ne trouve sur Google&nbsp;?
+          Nous créons aussi des sites web conçus pour être <strong style="color:#0A1F3D;">trouvés sur Google dans votre ville et votre métier</strong>,
+          avec un formulaire qui vous envoie chaque demande complète.
+          <strong style="color:#0A1F3D;">Prix&nbsp;: 490&nbsp;€</strong>, payé seulement si le site vous plaît, après l'avoir vu en ligne.
+          <a href="{SITE_WEB_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">Voir l'offre site web</a>
+        </p>
+      </td></tr>
+    </table>
   </td></tr>
 
   <!-- Mentions légales -->
