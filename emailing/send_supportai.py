@@ -60,6 +60,8 @@ PREMIUM_URL = STRIPE_LINK_PREMIUM or TARIF_URL
 CODESOURCE_URL = STRIPE_LINK_CODESOURCE or TARIF_URL
 FONCTIONNEMENT_URL = "https://supportai.fr#fonctionnement"
 CONFIGURATEUR_URL = "https://supportai.fr#configurateur"
+# Section « Création de sites web » du site (ancre #creation-site)
+SITE_WEB_URL = f"{SITE_URL}/#creation-site"
 # Espace de configuration (Streamlit) : accessible après commande,
 # connexion sécurisée via Google.
 STREAMLIT_URL = "https://supportai-config.streamlit.app/"
@@ -447,6 +449,12 @@ Comment ça marche : {FONCTIONNEMENT_URL}
 Connexion Google disponible - Accédez à votre espace SupportAI en un clic, sans compte à créer : {STREAMLIT_URL}
 
 Répondez à cet email pour démarrer : {CONTACT_EMAIL}
+
+P.-S. Si votre site a besoin d'un coup de neuf, ou si vous n'en avez pas encore :
+nous créons aussi des sites web, avec un formulaire de contact qui vous envoie
+chaque demande complète (nom, téléphone, projet, message). Nous vous présentons
+le vôtre déjà en ligne, et vous ne payez 490 € que si vous le gardez :
+{SITE_WEB_URL}
 
 ---
 SupportAI · {COMPANY_ID_LABEL} {_format_company_id(COMPANY_ID_VALUE)} · {ADRESSE_SOCIETE}
@@ -1000,6 +1008,16 @@ def _build_html(contact: dict, has_logo: bool = False, has_thumb: bool = False) 
          style="color:#1976D2;text-decoration:underline;font-weight:bold;">
         Écrivez-nous, réponse sous 24h
       </a>
+    </p>
+  </td></tr>
+
+  <!-- P.-S. : création de sites web -->
+  <tr><td style="padding-top:22px;">
+    <p style="font-size:13px;color:#4A5A6E;margin:0;font-family:Arial,sans-serif;line-height:1.6;">
+      <strong style="color:#0A1F3D;">P.-S.</strong> Si votre site a besoin d'un coup de neuf, ou si vous n'en avez pas encore :
+      nous créons aussi des sites web, avec un formulaire de contact qui vous envoie chaque demande complète
+      (nom, téléphone, projet, message). Nous vous présentons le vôtre déjà en ligne, et vous ne payez 490 € que si vous le gardez.
+      <a href="{SITE_WEB_URL}" style="color:#1976D2;text-decoration:underline;font-weight:bold;">Voir l'offre site web</a>
     </p>
   </td></tr>
 
