@@ -1,4 +1,5 @@
 ﻿nda,siret,denomination,code_postal,ville,region,qualiopi,nb_stagiaires,nb_formateurs,specialite,site_web,email_principal,emails_trouves,email_source,statut,date_scraping
+24280150928,35327106700087,EUROFEU SERVICES - SAS,,,24,formation,84056,350,"Electricité, électronique (non compris automatisme et productique)",https://eurofeu.webbiz.gescof.com,dpt.formation@eurofeu.fr,dpt.formation@eurofeu.fr,site,ok,2026-11-07 10:57:13
 11930743793,79018467501787,BUREAU VERITAS EXPLOITATION,92400,COURBEVOIE,11,formation,85659,799,"Sécurité des biens et des personnes, police, surveillance",https://formation.bureauveritas.fr,,,,site_sans_email,2026-11-06 11:56:33
 11921576392,78538868700044,FEDERATION NATIONALE DE PROTECTION CIVILE,,,11,formation,89206,1763,"Enseignement, formation",https://www.protection-civile.org,contact@protection-civile.org,contact@protection-civile.org,site,ok,2026-11-05 12:00:12
 11930620393,77567227221138,CROIX ROUGE FRANCAISE,,,11,formation;apprentissage;vae,97305,6507,Santé,https://www.croix-rouge.fr,donateurs@croix-rouge.fr,donateurs@croix-rouge.fr;devenir.benevole@croix-rouge.fr;information@croix-rouge.fr,site,ok,2026-11-03 11:44:41
