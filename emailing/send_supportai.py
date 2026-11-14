@@ -1042,6 +1042,9 @@ def _build_html(contact: dict, has_logo: bool = False, has_thumb: bool = False) 
       <p style="font-size:10px;color:#9CA3AF;margin:0;font-family:Arial,sans-serif;line-height:1.6;text-align:center;">
         IA : Google Gemini &middot; Conforme RGPD &middot; Prospection B2B &middot; Intérêt légitime art. 6.1.f RGPD
       </p>
+      <p style="font-size:11px;color:#6B7B8E;margin:8px 0 0;font-family:Arial,sans-serif;line-height:1.6;text-align:center;">
+        <a href="{_mailto('STOP', 'Bonjour, merci de ne plus me contacter.')}" style="color:#6B7B8E;text-decoration:underline;">Se désabonner</a>
+      </p>
 
     </td></tr>
     </table>
