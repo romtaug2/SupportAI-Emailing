@@ -1,0 +1,43 @@
+{
+ "started_at": "2026-11-15T13:12:56.144354+00:00",
+ "ended_at": "2026-11-15T13:28:48.306478+00:00",
+ "test_mode": false,
+ "incremental": true,
+ "verticals": [
+  "auto_ecole",
+  "ecommerce",
+  "hotels",
+  "immo"
+ ],
+ "summary": {
+  "auto_ecole": {
+   "status": "ok",
+   "inserted": 4,
+   "updated": 0,
+   "unchanged": 0,
+   "skipped_known": 12659
+  },
+  "ecommerce": {
+   "status": "ok",
+   "inserted": 4,
+   "updated": 0,
+   "unchanged": 0,
+   "skipped_known": 9142
+  },
+  "hotels": {
+   "status": "ok",
+   "inserted": 0,
+   "updated": 0,
+   "unchanged": 17,
+   "skipped_known": 0
+  },
+  "immo": {
+   "status": "ok",
+   "inserted": 440,
+   "updated": 0,
+   "unchanged": 0,
+   "skipped_known": 398
+  }
+ },
+ "exit_code": 0
+}
