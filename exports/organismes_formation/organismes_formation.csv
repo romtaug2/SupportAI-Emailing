@@ -1,4 +1,6 @@
 ﻿nda,siret,denomination,code_postal,ville,region,qualiopi,nb_stagiaires,nb_formateurs,specialite,site_web,email_principal,emails_trouves,email_source,statut,date_scraping
+11756425575,80512894900015,En Voiture Simone,75017,PARIS 17,11,formation,53911,1593,"Enseignement, formation",https://www.envoituresimone.com,hello@envoituresimone.com,hello@envoituresimone.com,site,ok,2026-11-24 14:40:50
+11922162892,53861386000013,TOTALENERGIES LEARNING SOLUTIONS,,,11,formation;apprentissage,52771,600,Formations générales,https://catalogueoleum.catalogueformpro.com,rc.eff-oleum@totalenergies.com,rc.eff-oleum@totalenergies.com,site,ok,2026-11-24 14:40:56
 82691276869,79314668900047,NEPSOD EVOLUTION,,,84,formation;apprentissage,59812,89,Formations générales,https://nepsod.com,accueil@nepsod.com,accueil@nepsod.com,site,ok,2026-11-23 14:14:30
 11755456275,81515871200092,INSTITUT NATIONAL DE FORMATION,,,11,formation;bilan;vae,61586,1511,Spécialités plurivalentes des échanges et de la gestion,https://www.inff.fr,contact@inff.fr,contact@inff.fr,site,ok,2026-11-21 12:19:27
 11780763778,54206547901478,STELLANTIS AUTO SAS,,,11,formation,62242,147,"Mécanique générale et de précision, usinage",https://www.emastellantis.fr,,,,site_sans_email,2026-11-20 12:39:21
